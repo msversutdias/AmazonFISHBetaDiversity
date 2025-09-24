@@ -1,0 +1,17 @@
+"Fun_Bsim";"pvalue_Fun_Bsim"
+"(Intercept)";-2.45;0.33
+"energ_US";-0.28;0.33
+"water_US";-0.03;0.67
+"temp_US";-0.13;0.33
+"size_US";0.04;0.67
+"Div_US";0.07;0.33
+"harsh_US";0.16;0.33
+"position_US";0.09;0.67
+"fragm_US";-0.14;0.67
+"SampEff_US";-0.4;0.33
+"Marine_Incurs_US";-0.36;0.33
+"CurrentLGM_US";0.29;0.33
+"Pebas23mya_US";-0.01;1
+"hydro_US";0.12;0.33
+"spat_US";0.2;0.33
+"dev";323.76;3813

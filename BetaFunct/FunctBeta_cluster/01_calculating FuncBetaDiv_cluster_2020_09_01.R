@@ -1,0 +1,186 @@
+px<-read.table("fish_mat_2020_09_01.csv",header=TRUE,sep=";")
+
+px[1:5,1:3]
+px$basin<-rownames(px)
+library(reshape2)
+px<-melt(px)
+head(px)
+px<-px[px$value!=0,]
+write.table(px,file = "fish_mat_2020_09_01_lista.csv",sep=";",row.names = FALSE)
+
+library(clue)
+library(ape)
+library(cluster)
+library(geometry)
+library(gtools)
+library(ade4)
+library(betapart)
+library(foreach);
+library(doParallel)
+
+#mudando nome de acordo com a filogenia
+muda_nome=function(x,sep=" "){
+  unlist(lapply(strsplit(x = as.character(x),sep),function(x){
+    paste(x[1],x[2],sep="_")
+  }))
+}
+
+
+#community data
+fish_mat<-read.csv("fish_mat_2020_09_01.csv",sep=";",
+                header=T,dec=",")
+dim(fish_mat)
+fish_mat[1:4,1:3]
+
+
+
+#trait data
+trait<-read.csv("Base morpho Amazon_NA filled_Sbrosse_2020_05_18.csv",sep=";",
+                header=T,dec=",")
+
+summary(trait)
+
+#removing trophic level
+trait<-trait[,!colnames(trait)%in%c("Niveau_Trophique")]
+summary(trait)
+
+trait[1:15,1:7]
+
+#NA values
+na<-as.vector(trait$Genusspecies.base.morpho[15])
+trait[trait==na]<-NA
+
+summary(trait)
+dim(trait)
+
+traitFULL<-trait
+head(traitFULL[,1:7],30)
+
+
+
+#calculating FD based on filled traits (Su et al. 2020 GEB) 2020_05_15
+traitFULL<-droplevels(traitFULL[!is.na(trait$Genusspecies.base.morpho),])
+dim(traitFULL)
+traitFULL$GenusspeciesAmazonfishbase2<-
+  muda_nome(traitFULL$Genusspecies.Amazon.fishbase,sep="[.]")
+rownames(traitFULL)<-traitFULL$GenusspeciesAmazonfishbase2
+summary(traitFULL)
+
+#performing gower on trait values with the same species in fish_mat
+#remove species not in the matrix
+toto<-unique(traitFULL$GenusspeciesAmazonfishbase2)
+sp<-colnames(fish_mat)
+length(toto)
+length(sp)
+
+head(setdiff(toto,sp),30)####Normal: Seb has sent names according Tedesco et al. 2017
+head(setdiff(sp,toto),30)
+
+length(intersect(sp,toto))/length(sp) #1661 species remained with trait information (69%)
+
+#AGAIN excluding species from fish_mat according to trait
+dim(fish_mat)
+fish_mat_trait<-fish_mat[,intersect(sp,toto)]
+dim(fish_mat_trait)
+
+head(traitFULL)
+dim(traitFULL)
+traitPCA<-droplevels(traitFULL[intersect(sp,toto),])
+dim(traitPCA)
+
+traitPCA[1:25,]#c("EdHd","MoBd","JlHd","EhBd","BlBd","HdBd","PFiBd","PFlBl","CFdCPd","Length")
+dim(traitPCA)
+summary(traitPCA)
+
+traitPCA<-apply(traitPCA[,c("EdHd","MoBd","JlHd","EhBd","BlBd",
+                            "HdBd","PFiBd","PFlBl","CFdCPd",
+                            "Length")],
+                2,function(x){ (x-mean(x))/(sd(x))  })#standardize traits
+head(traitPCA)
+summary(traitPCA)
+
+
+# performing PCA
+pca_trait<-prcomp(traitPCA,center = FALSE,scale. = FALSE)
+summary(pca_trait)
+
+biplot(pca_trait,xlim=c(-1,1),ylim=c(-0.2,0.07))
+biplot(pca_trait,cex=0.2)
+plot(pca_trait$x[,1:2])
+dim(pca_trait$x)
+
+
+# Uncomment to calculate again!
+trait_gow<-dist(pca_trait$x)#using Euclidean distance
+
+#qualidade do espaco funcional Marié et al. 2015 GEB
+source("quality_funct_space_fromdist2.R")
+
+quality <-quality_funct_space_fromdist (trait_gow,  nbdim=7,   plot="quality_funct_space_I")
+quality$meanSD
+
+
+#paralleling dissimilarity calculation: 14/07/2020
+BsimParallel<-function(mat=fish_mat_trait,
+                       trait=pca_trait$x[,1:2]){
+
+  library(betapart);  ID<-rownames(mat);  Bsim <- as.matrix(outer(ID,ID,paste))
+  rownames(Bsim)<-ID;colnames(Bsim)<-ID
+  pegar<-as.data.frame(Bsim);   pegar[]<-FALSE
+  pegar[lower.tri(pegar)]<-TRUE;   diag(pegar)<-TRUE
+
+  id <- Bsim[as.matrix(pegar)]
+  id <- data.frame(Bsim=NA,id=id)
+  id2<-do.call("rbind",strsplit(id$id,split = " "))
+  colnames(id2)<-c("id1","id2")
+  id<-data.frame(id,id2);   rm(id2)
+  id$Bsor<-NA;id$Bsne<-NA;
+  head(id)
+
+  library(foreach);library(doParallel)
+  nc<-4
+  registerDoParallel(cores = nc)
+
+  resu<-foreach(a=id$id1,b=id$id2,.combine = rbind,
+                .packages = c("betapart"),
+                .export = c("mat", "trait")) %dopar% {
+                  beta_funct<-functional.beta.pair(x = mat[c(a,b),],
+                                                   traits = trait,
+                                                   index.family = "sorensen")
+                  fin<-data.frame(Bsor=as.vector(beta_funct$funct.beta.sor),
+                                  Bsim=as.vector(beta_funct$funct.beta.sim),
+                                  Bsne=as.vector(beta_funct$funct.beta.sne))
+                  (fin)
+                }
+  #head(id)
+  Bsim<-Bsne<-Bsor<-pegar
+  Bsor[Bsor==TRUE]<-resu$Bsor
+  Bsim[Bsim==TRUE]<-resu$Bsim
+  Bsne[Bsne==TRUE]<-resu$Bsne
+  return(list(Bsor=as.dist(Bsor),
+              Bsim=as.dist(Bsim),
+              Bsne=as.dist(Bsne)))
+}
+
+
+system.time(beta_funct<-functional.beta.pair(x = fish_mat_trait[1:4,],
+                                     traits = pca_trait$x[,1:3],
+                                     index.family = "sorensen"))
+system.time(resu<-BsimParallel(mat=fish_mat_trait[1:4,],
+                               trait=pca_trait$x[,1:3]))
+
+
+library(betapart)
+system.time(beta_funct<-functional.beta.pair(x = fish_mat_trait,
+                                             traits = pca_trait$x[,1:2],
+                                             index.family = "sorensen"))
+
+# write.table(x = as.matrix(beta_funct$funct.beta.sim),
+#             file="BetaFunct/BetaFuncSim_3D_filledNAtrait_SBrosse_2020_05_15.csv",
+#             sep=";")
+# write.table(x = as.matrix(beta_funct$funct.beta.sor),
+#             file="BetaFunct/BetaFuncSor_3D_filledNAtrait_SBrosse_2020_05_15.csv",
+#             sep=";")
+# write.table(x = as.matrix(beta_funct$funct.beta.sne),
+#             file="BetaFunct/BetaFuncSne_3D_filledNAtrait_SBrosse_2020_05_15.csv",
+#             sep=";")

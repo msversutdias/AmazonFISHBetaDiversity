@@ -1,0 +1,3261 @@
+---
+title: "Explaining fish species composition in the Amazon basin"
+author: "AmazonFISH partners"
+date: '`r Sys.time()`'
+fontsize: 11pt
+geometry: margin=1.5cm
+bibliography: biblio_style/references.bib
+csl: biblio_style/ecology-letters.csl
+output: 
+  pdf_document:
+    fig_height: 6
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+theme: readable
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r,echo=FALSE,include=TRUE}
+library(knitr)
+library(knitcitations)
+library(formatR)
+#cleanbib()
+options("citation_format" = "pandoc",digits=2)
+opts_chunk$set(tidy=T,
+               tidy.opts=list(width.cutoff=60))
+
+
+panel.cor <- function(x, y, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- (cor(x, y))
+    txt <- format(round(r,2))
+    r <- abs(r)
+    text(0.5, 0.5, txt, cex = 4*r)
+}
+var_expl=function(x){
+    if(is.null(x$null)){
+      print("This is a LM: R2.adjusted has been printed with coefficients!")
+    }else     (paste("PseudoR2",round((x$null-x$deviance)/x$null,2)*100,"%"))
+  } 
+
+# standardize function (centering and reducing, returning vectors)
+Standard <- function(x){ as.vector((x-mean(x,na.rm=T))/(2*sd(x,na.rm=T)))  }
+
+#mudando nome de acordo com a filogenia
+muda_nome=function(x,sep=" "){
+  unlist(lapply(strsplit(x = as.character(x),sep),function(x){
+    paste(x[1],x[2],sep="_")
+    }))
+}
+
+#criar categoria de cores de acordo com quartis
+catego_cores<-function(g){
+  ecd_f<-ecdf(g)
+  g_f<-g
+  g_f[]  <-NA
+  g_f[ecd_f(g)<=0.25]<-1
+  g_f[ecd_f(g)>0.25 & ecd_f(g)<=0.5]<-2
+  g_f[ecd_f(g)>0.5 & ecd_f(g)<=0.75]<-3
+  g_f[ecd_f(g)>0.75]<-4
+  return(g_f)
+}
+
+
+#plot function
+# y=rnorm(10)
+# d=data.frame(y,x=6*y+rnorm(10),z=-1.5*y+rnorm(10),
+#              p=6*y+rnorm(10),r=6*y+rnorm(10))
+# mod<-lm(y~x+z+p+r,d)
+# groups=c(1,2,3,4,4)
+plot_effect <- function(x,groups=NULL){
+  #x=mod
+  #g=c(1,3,3)
+  f<-as.data.frame(summary(x)$coefficients)#[-1,]
+  f$factor = rownames(f)
+  #f<-f[order(f$factor),]
+  P<-grep(pattern = "P",x = colnames(f))
+  op<-par()$mar
+  x_eixo = 1:nrow(f)
+  par(mar=c(5,13,0.5,0.5))
+  stripchart(f$Estimate~x_eixo,las=1,cex=3,
+             xlim=c(min(f$Estimate-1.96*f$`Std. Error`),max(f$Estimate+1.96*f$`Std. Error`)),
+             #col=ifelse(f[,P]<=0.05,"black","red"),
+             pch=1,yaxt="n",
+             ylab="",xlab="Coefficient estimates");abline(v=0,lty=1,lwd=2,col="gray")
+  if(!is.null(groups)){
+    g=groups
+    cores<-gray.colors(n = length(unique(groups)),start = 0,end = 1,alpha = 0.4)
+    cores<-cores[groups]
+    for(i in seq_along(g)){
+      rect(xleft = min(f$Estimate-1.96*f$`Std. Error`)-1, ybottom = i-0.5,
+           xright = max(f$Estimate+1.96*f$`Std. Error`)+1, ytop = i+0.5,
+           col=cores[i],border = "white")
+    }
+  }
+  #abline(h=x_eixo,lty=2,col="lightgray")
+  axis(side = 2,at = x_eixo, labels = f$factor,las=1)
+  segments(x0 = f$Estimate-1*f$`Std. Error`, y0 = 1:length(f$factor),
+           x1=f$Estimate+1*f$`Std. Error`,y1 = 1:length(f$factor),lwd=6)
+  segments(x0 = f$Estimate-1.96*f$`Std. Error`, y0 = 1:length(f$factor),
+           x1=f$Estimate+1.96*f$`Std. Error`,y1 = 1:length(f$factor),lwd=3)
+  points(y=x_eixo,x=f$Estimate,las=1,cex=3,
+             bg=ifelse(f[,P]<=0.05,"black","white"),
+         col="black",pch=21)
+  par(mar=op)
+}
+# plot_effect(mod,groups)
+
+
+```
+
+\pagebreak
+
+***
+
+>**NOTE_1:** *we reduced the number of digits to print when printing numeric values to improve visualization.*
+
+>**NOTE_2:** *this document has been created using Rmarkdown^[http://rmarkdown.rstudio.com/].*
+
+
+***
+
+\pagebreak
+
+# Charging Biological data
+
+## Species composition
+
+Charging the complete data set and setting *0* to all *NA* values.
+```{r}
+fish_mat=read.csv(paste("StatistiquesSubBasinAmazon_02052016/",
+                        "NewData_2019_10/Dataset1_SpeciesList_97bv_311019.csv",
+                        sep=""),
+                  # paste("/home/ird/Insync/msdias@unb.br/OneDrive Biz/Amazon",
+                  #       "/AmazonFish_analises/",
+                  #       "StatistiquesSubBasinAmazon_02052016/",
+                  #       "NewData_2017_04/MatrixSpecies_0417.csv",
+                  #       sep="")
+                  sep=";",header=T)
+
+
+
+#leaving only valid species names
+dim(fish_mat)
+head(fish_mat)
+table(fish_mat$Occurrence.Status)
+fish_mat<-droplevels(fish_mat[fish_mat$Occurrence.Status %in% "valid",])
+
+fish_mat$Referent.Species.Name<-muda_nome(fish_mat$Referent.Species.Name,sep="[.]")
+fish_mat[10065,]
+
+table(grep(fish_mat$Referent.Species.Name,pattern = "[_]")==1:length(fish_mat$Referent.Species.Name))
+
+
+# ##excluding additional marine fish families   2022_03_25
+# #marine "Atherinopsidae", "Achiridae", "Belonidae", "Clupeidae","Engraulidae",
+# #       "Hemiramphidae", "Potamotrygonidae", "Pristigasteridae", "Sciaenidae",
+# #       "Tetraodontidae"
+# #not marine according to Lovejoy et al.2006 "Atherinopsidae"
+# fish_mat<-droplevels(fish_mat[!fish_mat$Family.Referent.Species %in%
+#                                 c("Atherinopsidae", "Achiridae", "Belonidae",
+#                                   "Clupeidae","Engraulidae", "Hemiramphidae",
+#                                   "Potamotrygonidae", "Pristigasteridae", "Sciaenidae",
+#                                   "Tetraodontidae"),])
+# table(fish_mat$Family.Referent.Species)
+
+
+####checking if marine species are out
+# head(fish_mat)
+# marineIncSp<-c("Potamotrygon","Paratrygon","Heliotrygon","Plesiotrygon","Anchoviella","Anchovia",
+#   "Lycengraulis","Pterengraulis","Amazonsprattus","Jurengraulis","Pellona","Ilisha","Pristigaster",
+#   "Rhinosardina","Potamorhaphis","Belonion","Pseudotylusurus","Hyporhamphus",
+#   "Plagioscion","Pachypops","Pachyurus","Petilipinnis","Colomesus")
+# table(fish_mat$Genus.Referent.Species[fish_mat$Genus.Referent.Species %in% marineIncSp])
+# fish_mat[fish_mat$Genus.Referent.Species%in% marineIncSp,]
+# fish_mat<-fish_mat[!fish_mat$Genus.Referent.Species %in% marineIncSp,]
+
+
+
+# ##eliminating Orestias species because they are from Titikaka lake
+fish_mat<-droplevels(fish_mat[!fish_mat$Genus.Referent.Species %in% "Orestias",])
+
+
+
+#unindo os codigos antigos e novos
+fish2=read.csv(paste("StatistiquesSubBasinAmazon_02052016/",
+                     "NewData_2019_10/stat97bv_311019.csv",
+                     sep=""),
+               sep=";",header=T)[,c("Sub_drainage","Basin2stat")]
+head(fish2)
+
+fish_mat<-merge(x=fish_mat,y=fish2,by.x="Sub_drainage",by.y="Sub_drainage",all=T)
+head(fish_mat)
+fish_mat$basin<-fish_mat$Basin2stat
+
+#fish species lists
+head(fish_mat)
+sort(unique(fish_mat$Referent.Species.Name))
+
+fish_mat$occ<-1
+library(reshape2)
+fish_mat<-dcast(fish_mat,basin~Referent.Species.Name,
+                fun.aggregate = sum, value.var = "occ")
+dim(fish_mat)
+
+fish_mat[1:10,1:5]
+rownames(fish_mat)<- fish_mat$basin
+fish_mat <- fish_mat[,-c(1)]
+fish_mat[fish_mat>0]<-1
+
+
+
+
+#setting NA to 0
+fish_mat[is.na(fish_mat)] <- 0
+
+
+#######################################
+  # biz<-(fish_mat[c("Pachitea","Ucayali2","Apurimac1","Urubamba",
+  #            "Huallaga","Maranon5","Maranon3","Santiago", "Pastaza","
+  #            Curaray","Napo2"),-1])
+# biz2<-fish_mat[c("Pachitea","Ucayali2","Apurimac1","Urubamba",
+#            "Huallaga","Maranon5","Maranon3","Santiago", "Pastaza","
+#            Curaray","Napo2"),apply(fish_mat,2,sum,na.rm=T)==1]
+# biz2 <- biz2[,apply(biz2,2,sum,na.rm=T)==1]
+# dim(biz2)
+# rowSums(biz2)
+# id1<-grep(pattern = c("Maranon"),rownames(fish_mat))
+# id2<-grep(pattern = c("Ucayali"),rownames(fish_mat))
+# id3<-grep(pattern = c("Tapaj"),rownames(fish_mat))
+# id4<-grep(pattern = c("Xingu"),rownames(fish_mat))
+# id<-c(id1,id2,id3,id4);rm(id1,id2,id3,id4)
+# biz3<-fish_mat[id,apply(fish_mat,2,sum,na.rm=T)==1]
+# biz3<-biz3[,!apply(biz3,2,sum,na.rm=T)==0]
+# dim(biz3)
+# biz3$basin<-rownames(biz3)
+# 
+# #especies endemicas nos andes
+# biz=reshape2::melt(biz3)
+# biz[is.na(biz)]<-0
+# 
+# #especies totais nos andes
+# biz<-droplevels(biz[biz$value>0,])
+# dim(biz)
+# head(biz)
+# table(biz$variable)
+
+#especies e generos das bacias selecionadas
+# biz<-droplevels(biz[biz$value==1,])
+# head(biz)
+# dim(biz)
+# biz<-biz[order(biz$basin),]
+# write.table(biz,"especies_generos_OccUnica_baciasSelecionadas.csv",sep=";")
+
+#######################################
+
+
+library(vegan)
+
+
+################
+# ## 2024_04_18 eliminating undersampled dranages
+# undersampled<-c("Jamanxin","Jari","Paru_Este","Demini","Tapaua","Grande","Apurimac","Ucayali2","Curaray")
+# fish_mat<-fish_mat[!fish_mat$Sub_drainage %in% undersampled,]
+################
+
+
+```
+
+
+
+
+## Calculating and Decomposing fish dissimilarity
+
+Variation in species composition among pair of sites can be decomposed in two phenomenons: species **turnover** and *nestedness* `r citep( c("10.1111/j.1466-8238.2011.00756.x","10.1111/j.1466-8238.2009.00490.x") )`. The former represents the proportion of species replaced from one site to another and is independent of differences in species richness among sites. The latter quantifies differences in species composition that are related to difference in species richness among sites. This partitioning is useful to separate confounding processes acting on variation on species composition [@Baselga_2009; @Baselga_2012]. Such partitioning can be done using two distinct dissimilarity indices (i.e., *Sorensen* and *Jaccard*), but the rationale behind this procedure is the same whatever the chosen index. We opted here to use the Sorensen index because it is one of the most used index in ecological studies. The **betapart** package is used to calculate both partitions.
+
+```{r}
+library(ape)
+library(RColorBrewer)
+library(recluster)
+
+
+
+D_fish<- betapart::beta.pair(fish_mat,index.family = "sorensen")
+str(D_fish)
+
+
+# #excluding species per site matrix
+#rm(fish_mat)
+fish_tree <- (hclust((D_fish$beta.sim),method = 'average'))
+# cores<-cutree(fish_tree,h=0.5)
+# cores<-rainbow(length(unique(cores)))[cores]
+# names(cores)==as.phylo(fish_tree)$tip.label
+# cores<-brewer.pal(n = 11, name = 'Paired')[cores]
+
+#Definindo numero de cluster Kreft & Jetz 2010
+d2 <- cophenetic(fish_tree)
+#transform hclust to phylogenetic tree (ape)
+tree=as.phylo(fish_tree)
+#inspect explained diversity for different cuts of a tree
+expl_div<-recluster.expl.diss(tree,D_fish$beta.sim,maxcl=30)
+#expl_div
+R2=expl_div$expl.div
+clusters=expl_div$nclust#[-length(expl_div$nclust)]
+library(segmented)
+out.lm<-lm(R2~clusters)
+o<-segmented(out.lm,seg.Z=~clusters,psi=list(clusters=c(15)),
+             control=seg.control(display=FALSE))
+slope(o)
+o
+k=round(o$psi[,2],0);k
+plot(R2~clusters,main=paste("Clusters= ",k,sep=""));abline(v=k,col="red",lwd=3);
+plot(o,add=T)
+cores <- cutree(fish_tree, k=k)
+coresDF<-data.frame(subdrainage=names(cores),cores=cores)
+
+cores<-c(brewer.pal(n=k,name = "Paired"))[cores]
+coresDF$cores<-cores
+
+op<-par()
+#jpeg("a_upgma_species compositionBsim.jpeg",width = 3800,height = 1100,res = 200)
+# layout(mat = c(1,2))
+#par(mar=c(1,1,1,1),mfrow=c(1,3))
+#plot(fish_tree,h=-1,las=1,col.label=cores,ylab="Fish dissimilarity (Bsim)");box();grid()
+#rect.hclust(fish_tree,h=0.5,border = rainbow(11))
+#abline(h=0.6,lwd=5,col="red")
+#title("a) Species composition")
+plot(as.phylo(fish_tree),type="f",las=1,cex=1.5,
+     tip.col=cores,font=c(2));box();#grid()
+mtext("a)", adj=0.01, line=-3, cex=3)
+
+# library(GISTools)
+library(RColorBrewer)
+library(sf)
+amazon=st_read(paste("StatistiquesSubBasinAmazon_02052016/ShapefileBasin/",
+                            sep=""),
+                      layer = "BasinNivel2_v052016")
+
+
+#g60<-cutree(tree = fish_tree,h = 0.5)+1
+g60 <- data.frame(basin = as.phylo(fish_tree)$tip.label, Cores=cores)
+rownames(g60)<-g60$basin
+g60<-g60[amazon$BvNiv2,]
+table(g60$basin==amazon$BvNiv2)
+amazon$Cores<-g60$Cores
+
+plot(amazon["Cores"])
+
+
+summary(as.vector(D_fish$beta.sim))
+sd(as.vector(D_fish$beta.sim))
+# 
+library(vegan)
+set.seed(55444)
+NMDS <- metaMDS((D_fish$beta.sim),k = 2,#try = c(1,10), 
+                #trymax = 200,
+                autotransform = F, noshare = F, 
+                previous.best = T,parallel=4)
+
+par(mar=c(1,1,1,1))
+plot(scores(NMDS,display="sites"),las=1,col="black",
+       pch=21,cex=4,bg=coresDF$cores,axes=F);box()
+text(x = -0.5,y = -0.3,paste0("stress = ",round(NMDS$stress,2)),cex=1.5)
+mtext("c)", adj=0.01, line=-3, cex=3)
+#dev.off()
+
+
+par(op)
+
+##cutting tree
+library(cluster)
+groups <- cutree(fish_tree,h = 0.4)
+groups <- data.frame(basin = names(groups), groups)
+prin_canal<-groups[groups$basin=="Amazon5",]$groups
+prin_canal <- as.vector(groups[groups$groups%in%prin_canal,]$basin)
+# plot(scores(NMDS),las=1,type="n")
+# text(scores(NMDS),rownames(scores(NMDS)),cex=0.8,col=groups$groups)
+
+#Mean distance from each group to the main channel
+library(plyr)
+groups <- ddply(.data = groups,.variables = 'groups',.fun = function(x){
+  # bas<-c("Paru_Este","Tapajos2")
+  # bas<-c("Jari")
+  bas<-as.vector(x$basin)
+  # bas<-as.vector(groups[groups$groups==6,]$basin)
+  if( any(prin_canal%in%bas) ) {
+    x$Bsim_m <- ( rep(0,length(bas)) )
+    return(x)
+    } else {
+      Bsim<-as.matrix(betapart::beta.pair(fish_mat[c(prin_canal,bas),],
+                                          index.family = "sorensen")$beta.sim)
+      resu<-mean(Bsim[prin_canal,bas])
+      x$Bsim_m <- ( rep(resu,length(bas)) )
+      return(x)
+    }
+})
+
+
+
+#merging fish data base
+amazon
+rownames(groups)<-groups$basin
+groups<-groups[amazon$BvNiv2,]
+table(groups$basin==amazon$BvNiv2)
+amazon$Bsim_m<-groups$Bsim_m
+
+plot(amazon["Bsim_m"])
+
+par(op)
+
+
+
+rm(op,k,groups,fish_tree,g60)
+```
+
+
+\pagebreak
+
+## Including PhyloDissimilarity
+
+I also calculated the Bsim component based on phylogenetic beta diversity from *betapart* package. Rabosky et al. published a fish supertree containing genetical of ~8000 sp and included all the other freshwater and marine species (~23000) to this supertree based on the taxonomy. They provided a supertree file (see *https://fishtreeoflife.org/downloads/*) containing 100 posterior draws from the final super tree. I select each of these 100 trees, calculated the Bsim with the AmazonFish data with each tree and then computed mean estimates of the 100 draws. Here is the mean Bsim phylobeta from all the 100 draws
+
+```{r}
+PBsim<-read.csv(paste0(getwd(),
+  "/BetaPhylo_meanvalues_Genet_Taxo/PSIMmean_over100posteriorSampling_2020_05_12.csv"),
+                sep=",",header=TRUE,row.names = 1)
+PBsim[1:5,1:5]
+
+PBsim<-as.dist(PBsim)
+
+#plot(metaMDS(PBsim,k=2,autotransform = FALSE))
+summary(as.vector(PBsim))
+sd(as.vector(PBsim))
+plot(D_fish$beta.sim~PBsim)
+cor.test(D_fish$beta.sim,PBsim,method = "pearson")
+
+
+PBsne<-read.csv(paste0(getwd(),
+  "/BetaPhylo_meanvalues_Genet_Taxo/PSNEmean_over100posteriorSampling_2020_05_12.csv"),
+                sep=",",header=TRUE,row.names = 1)
+PBsne[1:5,1:5]
+
+PBsne<-as.dist(PBsne)
+
+#plot(metaMDS(PBsne,k=2,autotransform = FALSE))
+summary(as.vector(PBsne))
+sd(as.vector(PBsne))
+plot(PBsne~PBsim)
+cor.test(PBsne,PBsim,method = "pearson")
+
+```
+
+I also calculated the Psim by using the ~635sp with genetic data to compare
+
+```{r}
+###########################
+# #phylogenetic diversity
+# #phylogeny
+filo<-read.tree(file="actinopt_12k_treePL.tre")#fish
+
+#especies presentes tanto na filogenia quanto no arquivo mami
+sp<-intersect(filo$tip.label,colnames(fish_mat));length(sp)
+
+#excluindo as especies do mapa para reter
+#somente as especies presentes na filogenia
+fish_mat_philo <- droplevels(fish_mat[,colnames(fish_mat) %in% sp])
+
+#deixar na filo as sp da matrix
+library(picante)
+filo_gamb<-prune.sample(samp = fish_mat_philo, phylo = filo)
+plot.phylo(filo_gamb,type="fan",edge.color="gray",cex=0.5)
+
+library(betapart)
+DsorPhylo<-phylo.beta.pair(x = fish_mat_philo,tree = filo_gamb,index.family = "sorensen")
+
+plot(DsorPhylo$phylo.beta.sim,D_fish$beta.sim)
+cor.test(DsorPhylo$phylo.beta.sim,D_fish$beta.sim)
+
+###########################
+
+```
+
+### PBsim using Cassemiro et al tree
+
+I also tested whether the results are consistent using the phylogeny provided by Cassemiro et al. (2023, PNAS), the link of data can be found here https://zenodo.org/record/6672927.
+
+```{r}
+library(ape)
+tr=read.nexus(paste0("BetaPhylo_meanvalues_Genet_Taxo/",
+  "Cassemiro et al 2023PNAS/",
+  "3167_Neotrop_Freshwater_Fish_spp_time_tree.tre"))
+
+# plot(tr,cex=0.1)
+tr$tip.label[1:30]
+
+
+tr$tip.label<-unlist(lapply(strsplit(tr$tip.label,split = "_"),function(x){
+  paste0(x[2:3],collapse = "_")
+}))
+
+tr$tip.label[1:30]
+
+filo<-tr
+
+#especies presentes tanto na filogenia quanto no arquivo mami
+sp<-intersect(filo$tip.label,colnames(fish_mat));length(sp)
+
+#excluindo as especies do mapa para reter
+#somente as especies presentes na filogenia
+fish_mat_philo <- droplevels(fish_mat[,colnames(fish_mat) %in% sp])
+
+#deixar na filo as sp da matrix
+library(picante)
+filo_gamb<-prune.sample(samp = fish_mat_philo, phylo = filo)
+plot.phylo(filo_gamb,type="fan",edge.color="gray",cex=0.5)
+
+library(betapart)
+DsorPhylo<-phylo.beta.pair(x = fish_mat_philo,
+                           tree = filo_gamb,
+                           index.family = "sorensen")
+
+
+PBsimCasse<-DsorPhylo$phylo.beta.sim
+
+#
+library(vegan)
+plot(PBsimCasse~PBsim,ylab="PBsim_Cassemiro et al 2023 (PNAS)",xlab="PBsim_Rabosky polytomy tree")
+res<-vegan::mantel(PBsimCasse,PBsim)
+text(0.2,0.5,paste0("Mantel r=",round(res$statistic,3),"; ",
+                    "p = ",round(res$signif,3)))
+```
+
+
+
+### Calculating Dpw
+
+This is a phylogenetic index between communities that is much more related to the basal origins of species. The index is equivalent to MPD but it is calculated as a distance between communities. We are applying this index to the full fish tree (genetic data + polytomies) as it is rather robust to such peculiarities.
+
+```{r}
+nullPhyloMetric<-function(mat,phylo,nreps){
+  library(mcreplicate)
+  cophe_phylo<-cophenetic(phylo)
+  obs<-comdist(mat, cophe_phylo, abundance.weighted=FALSE)
+  simu<-mc_replicate(nreps,{
+    mat_aleat<-randomizeMatrix(mat, null.model="richness")
+    resu<-comdist(mat_aleat, cophe_phylo, abundance.weighted=FALSE)
+    resu
+  },mc.cores=4)
+  stand<-function(x){(x-mean(x))/sd(x)}
+  
+  obs_simu<-cbind(obs,simu)
+  standardized_Metric<-t(apply(obs_simu,MARGIN = 1,FUN = stand))[,"obs"]
+  
+  obs[]<-standardized_Metric
+  return(obs)
+}
+
+
+
+#TREE GENETICS + POLYTOMIES
+#library(PhyloMeasures)
+library(picante)
+
+Dpw_mean<-file.exists("BetaPhylo_meanvalues_Genet_Taxo/DpwMean_30nullModelControlRichness_over100trees.csv")
+# Dpw_mean<-file.exists("BetaPhylo_meanvalues_Genet_Taxo/DpwMean_30nullModelControlRichness_over100trees_WITHOUT_MARINE.csv")#without marine
+#Dpw_mean<-FALSE
+
+if(Dpw_mean==FALSE){
+  filos<-read.tree(file="BetaPhylo_meanvalues_Genet_Taxo/actinopt_full.trees")#Rabosky et al. 2020 JBio & Chang et al. 2019 TREE
+  Dpw_poly<-list()
+
+  #loop over all posterior samplings
+
+  for(i in 1:100){
+    #i=1
+    #posterior samplings
+    filo<-filos[[i]] #fazendo com uma arvore so
+  
+    #especies presentes tanto na filogenia quanto no arquivo mami
+    sp<-intersect(filo$tip.label,colnames(fish_mat));length(sp)
+  
+    #fazendo a matriz
+    mat<-fish_mat[,sp]
+    #mat[1:10,1:6]
+    #dim(mat)
+  
+    #deixar na filo as sp da matrix 
+    #library(picante)
+    filo_gamb<-prune.sample(samp = mat, phylo = filo)
+    #plot.phylo(filo_gamb,type="fan",edge.color="gray",cex=0.5)
+  
+    # #Dpw
+    # library(PhyloMeasures) 
+    # Dpw_poly[[i]]<-cd.query(tree=filo_gamb,mat,standardize=FALSE)
+    # rownames(Dpw_poly[[i]])<-colnames(Dpw_poly[[i]])<-rownames(mat)
+    
+    #Dpw with null model to control for richness 2022_08_24
+#    system.time({
+      file<-paste0("BetaPhylo_meanvalues_Genet_Taxo/temp_Dpw_mean_withoutMarine/",
+              "DpwMean_30nullModelControlRichness_over100trees_WITHOUT_MARINE","_tree_",i,".csv") #exclude WITHOUT_MARINE for all species
+      if(!file.exists(file)) {
+        Dpw_poly[[i]]<-nullPhyloMetric(mat = mat, phylo = filo_gamb,nreps = 30)
+        write.table(x = as.matrix(Dpw_poly[[i]]),
+              file = paste0("BetaPhylo_meanvalues_Genet_Taxo/temp_Dpw_mean_withoutMarine/",#exclude WITHOUT_MARINE for all species
+                            "DpwMean_30nullModelControlRichness_over100trees_WITHOUT_MARINE","_tree_",i,".csv"), 
+              sep = ";")
+        
+      } else { 
+        Dpw_poly[[i]] <- as.dist(read.table( #exclude WITHOUT_MARINE for all species
+              file = paste0("BetaPhylo_meanvalues_Genet_Taxo/temp_Dpw_mean_withoutMarine/",
+                            "DpwMean_30nullModelControlRichness_over100trees_WITHOUT_MARINE","_tree_",i,".csv"),
+              sep = ";"))
+        
+        }
+      
+#    })
+     
+    print(i) 
+    rm(mat2)
+  }
+
+  Dpw_poly
+
+  #mean over all Dpw values
+  retorno<-function(x,val){
+    return(as.matrix(x)[,val])
+  }
+
+  Dpw_poly_mean<-sapply(rownames(as.matrix(Dpw_poly[[1]])),FUN = function(x){
+    rowMeans(sapply(Dpw_poly,retorno,val=x))
+  })
+
+  write.table(x = Dpw_poly_mean,
+              file = "BetaPhylo_meanvalues_Genet_Taxo/DpwMean_30nullModelControlRichness_over100trees.csv",
+              sep = ";")
+  # write.table(x = Dpw_poly_mean,
+  #             file = "BetaPhylo_meanvalues_Genet_Taxo/DpwMean_30nullModelControlRichness_over100trees_WITHOUT_MARINE.csv",
+  #             sep = ";")
+
+} else {
+  Dpw_mean<-as.dist(read.table("BetaPhylo_meanvalues_Genet_Taxo/DpwMean_30nullModelControlRichness_over100trees.csv",
+                               sep=";",header=TRUE))
+  # Dpw_mean<-as.dist(read.table("BetaPhylo_meanvalues_Genet_Taxo/DpwMean_30nullModelControlRichness_over100trees_WITHOUT_MARINE.csv",
+  #                              sep=";",header=TRUE))
+  # Dpw_mean<-as.dist(read.table("BetaPhylo_meanvalues_Genet_Taxo/DpwMean_over100trees_withoutMarineGroups.csv",
+  #                              sep=";",header=TRUE))
+}
+
+
+#TREE: GENETICS
+dim(fish_mat_philo)
+filo_gamb
+# Dpw_gen<-(cd.query(tree=filo_gamb,
+#                    matrix.a = fish_mat_philo,
+#                    standardize=FALSE))
+# Dpw_gen<-nullPhyloMetric(mat = fish_mat_philo, phylo = filo_gamb,nreps = 1)
+# 
+# rownames(Dpw_gen)<-rownames(fish_mat_philo)
+# colnames(Dpw_gen)<-rownames(fish_mat_philo)
+# Dpw_gen<-as.dist(Dpw_gen)
+# 
+# #Dpw genetic tree vs full tree
+# plot(Dpw_mean~Dpw_gen,asp=1);abline(a = 0,b = 1)
+# cor(Dpw_mean,Dpw_gen,method = "spearman")
+plot(Dpw_mean~dist(rowSums(fish_mat)))
+
+
+```
+
+
+### Calculating PCD
+
+PCDp over 635 species
+
+```{r}
+library(picante)
+# system.time(resu<-pcd(comm = fish_mat,tree = filo_gamb,reps=500))
+# resu$PCD
+# resu$PCDc
+# plot(resu$PCDp~resu$PCDc)
+# write.ta  ble(x = as.matrix(resu$PCDp),
+#             file="PCD_IvesHelmus/PCDp_500reps.csv",
+#           sep=";")
+# write.table(x = as.matrix(resu$PCDc),
+#             file="PCD_IvesHelmus/PCDc_500reps.csv",
+#           sep=";")
+# write.table(x = as.matrix(resu$PCD),
+#             file="PCD_IvesHelmus/PCD_500reps.csv",
+#           sep=";")
+D_PCDp<-as.dist(read.csv("PCD_IvesHelmus/PCDp_500reps.csv",header=T,row.names = 1,sep=";"))
+
+  
+plot(D_fish$beta.sim~D_PCDp)
+cor.test(D_fish$beta.sim,D_PCDp)
+plot(DsorPhylo$phylo.beta.sim~D_PCDp)
+cor.test(DsorPhylo$phylo.beta.sim,D_PCDp)
+
+```
+
+
+PCDp over ~2k species (genetics + taxonomy based polytomies)
+
+```{r}
+library(picante)
+D_PCDp29k<-as.dist(
+  read.csv("BetaPhylo_meanvalues_Genet_Taxo/PCDpMean_over54posteriorSampling_2020_05_08.csv",
+                            sep=";")
+  )
+
+  
+plot(D_fish$beta.sim~D_PCDp29k)
+cor.test(D_fish$beta.sim,D_PCDp29k)
+plot(DsorPhylo$phylo.beta.sim~D_PCDp29k)
+cor.test(DsorPhylo$phylo.beta.sim,D_PCDp29k)
+plot(D_PCDp~D_PCDp29k)
+cor.test(D_PCDp,D_PCDp29k)
+```
+
+
+
+\pagebreak
+
+## Functional Beta Diversity
+
+### Charging and checking morpho data 
+
+```{r}
+# trait<-read.csv("Base morpho Amazon_2020_04_15.csv",sep=";",header=T,dec=".")
+trait<-read.csv("Base morpho Amazon_NA filled_Sbrosse_2020_05_18.csv",sep=";",
+                header=T,dec=",")
+
+summary(trait)
+
+#removing trophic level
+trait<-trait[,!colnames(trait)%in%c("Niveau_Trophique")]
+summary(trait)
+
+trait[1:15,]
+
+#NA values
+# na<-as.vector(trait$MorphoAmazon_baseMorpho[15])
+na<-as.vector(trait$Genusspecies.base.morpho[15])
+trait[trait==na]<-NA
+
+summary(trait)
+dim(trait)
+
+traitFULL<-trait
+head(traitFULL[,1:7],30)
+
+
+# # #how many species without trait information?
+# cols<-colnames(trait)[-c(1:2)]
+# traitFULL$nNAvalues <-apply(traitFULL[,cols],1,function(x){
+#   sum(is.na(x))
+# })
+# table(traitFULL$nNAvalues==0)/nrow(traitFULL)#49% with complete information
+# table(traitFULL$nNAvalues<=4)/nrow(traitFULL)#73% with 4 or less NA values
+# table(traitFULL$nNAvalues<=8)/nrow(traitFULL)#74% with 8 or less NA values
+
+
+
+#calculating FD based on filled traits (Su et al. 2020 GEB) 2020_05_15
+traitFULL<-droplevels(traitFULL[!is.na(trait$Genusspecies.base.morpho),])
+dim(traitFULL)
+traitFULL$GenusspeciesAmazonfishbase2<-
+  muda_nome(traitFULL$Genusspecies.Amazon.fishbase,sep="[.]")
+rownames(traitFULL)<-traitFULL$GenusspeciesAmazonfishbase2
+summary(traitFULL)
+
+
+#performing gower on trait values with the same species in fish_mat
+#remove species not in the matrix
+toto<-unique(traitFULL$GenusspeciesAmazonfishbase2)
+sp<-colnames(fish_mat)
+length(toto)
+length(sp)
+
+head(setdiff(toto,sp),30)####Normal: Seb has sent names according Tedesco et al. 2017
+head(setdiff(sp,toto),30)
+
+length(intersect(sp,toto))/length(sp) #1661 species remained with trait information (69%)
+  
+#AGAIN excluding species from fish_mat according to trait
+dim(fish_mat)
+fish_mat_trait<-fish_mat[,intersect(sp,toto)]
+dim(fish_mat_trait)
+  
+head(traitFULL)
+traitPCA<-droplevels(traitFULL[intersect(sp,toto),])
+
+traitPCA[1:25,]#c("EdHd","MoBd","JlHd","EhBd","BlBd","HdBd","PFiBd","PFlBl","CFdCPd","Length")
+dim(traitPCA)
+summary(traitPCA)
+  
+#histogram Body size
+# jpeg("Body_size_allSpecies.jpeg",width = 1000,height = 1000,res = 200)
+hist(log10(traitPCA$Length+1),xlab="Maximum body length (cm)_log10(x+1)",
+     main="",las=1,ylim=c(0,400),xlim=c(0,3));box()
+# dev.off()
+
+traitPCA<-apply(traitPCA[,c("EdHd","MoBd","JlHd","EhBd","BlBd",
+                            "HdBd","PFiBd","PFlBl","CFdCPd",
+                            "Length")],
+                2,function(x){ (x-mean(x))/(sd(x))  })#standardize traits
+head(traitPCA)
+
+
+trait_gow<-dist(traitPCA)#not using Gower distance, but Euclid
+
+##########################
+
+
+# performing PCA
+pca_trait<-prcomp(traitPCA,center = FALSE,scale. = FALSE)
+#summary(pca_trait)
+knitr::kable(as.data.frame(summary(pca_trait)$importance))
+knitr::kable(as.data.frame(summary(pca_trait)$rotation))
+
+write.table(x = round(as.data.frame(summary(pca_trait)$importance),2),
+          file = "MorphoTraits_importance.csv",sep = ";")
+
+write.table(x = round(as.data.frame(summary(pca_trait)$rotation),2),
+          file = "MorphoTraits_rotation.csv",sep = ";")
+
+pc_plot<-pca_trait$x[,1:2]
+
+
+jpeg("Rplot_PCAaxes.jpeg",width = 12000,height = 6000,res = 400)
+par(mfrow=c(1,2))
+biplot(pca_trait,cex=0.3,pc.biplot = FALSE,
+       center=FALSE,scale=FALSE,ylim=c(-9,4),xlim=c(-9,4))
+plot(pc_plot,cex=0.6,pch=21,bg="gray",
+     ylim=c(-9,4),xlim=c(-9,4))
+dev.off()
+
+pdf("Rplot_PCAaxes.pdf",width = 16,height = 8)
+par(mfrow=c(1,2))
+biplot(pca_trait,cex=0.2,pc.biplot = FALSE,
+       center=FALSE,scale=FALSE,ylim=c(-9,4),xlim=c(-9,4))
+plot(pc_plot,cex=0.6,pch=21,bg="gray",
+     ylim=c(-9,4),xlim=c(-9,4))
+dev.off()
+
+
+
+
+```
+
+### Looking mean morphological position of sub-drainages
+
+```{r}
+# head(pca_trait$x)
+# fish_mat_trait[1:5,1:3]
+# 
+# for(i in 1:nrow(fish_mat_trait)){
+#   #i=2
+#   x<-fish_mat_trait[i,]
+#   x<-x[which(x>0)]
+#   X<-pca_trait$x[names(x),]
+#   media<-colMeans(X)
+#   devpad<-apply(X,2,sd)
+#   jpeg(paste0("mean_morpho/",rownames(x),".jpeg"))
+#   plot(pca_trait$x,bg="lightgray",pch=21,col="white",main=rownames(x))
+#   points(X)
+#   hpts <- chull(X)
+#   hpts <- c(hpts, hpts[1])
+#   lines(X[hpts, ])
+#   points(x = media[1],y=media[2],cex=3,col="red",pch=19)
+#   dev.off()
+# }
+# 
+# #species from the second right block (in morpho space)
+# rownames(pca_trait$x[pca_trait$x[,1]>1,])
+```
+
+
+
+
+### Quality of the functional
+
+This is really time consuming. Be prepared!
+
+
+```{r}
+# # Uncomment to calculate again!
+# 
+# 
+#qualidade do espaco funcional Marié et al. 2015 GEB
+# source("quality_funct_space_fromdist2.R")
+# library(clue)
+# quality <-quality_funct_space_fromdist (trait_gow,  nbdim=7,   plot="quality_funct_space_I")
+# quality$meanSD
+
+# resu2<-dudi.pco(d = trait_gow,scannf = F,nf = 10)
+# summary(resu2)
+# 
+# porc<-resu2$eig/sum(resu2$eig)
+# cumsum(porc[1:5])*100
+# 
+# plot(resu2$li[,1:5])
+# dim(resu2$li)
+# pcoa_eix<-as.matrix(resu2$li[,1:5])
+
+# #paralleling dissimilarity calculation: 14/07/2020
+# BsimParallel<-function(mat=fish_mat_trait,
+#                        trait=pca_trait$x[,1:2]){
+# 
+#   library(betapart);  ID<-rownames(mat);  Bsim <- as.matrix(outer(ID,ID,paste))
+#   rownames(Bsim)<-ID;colnames(Bsim)<-ID
+#   pegar<-as.data.frame(Bsim);   pegar[]<-FALSE
+#   pegar[lower.tri(pegar)]<-TRUE;   diag(pegar)<-TRUE
+#   
+#   id <- Bsim[as.matrix(pegar)]
+#   id <- data.frame(Bsim=NA,id=id)
+#   id2<-do.call("rbind",strsplit(id$id,split = " "))
+#   colnames(id2)<-c("id1","id2")
+#   id<-data.frame(id,id2);   rm(id2)
+#   id$Bsor<-NA;id$Bsne<-NA;
+#   head(id)
+#   
+#   library(foreach);library(doParallel)
+#   nc<-7
+#   registerDoParallel(cores = nc)
+#   
+#   resu<-foreach(a=id$id1,b=id$id2,.combine = rbind,
+#                 .packages = c("betapart"),
+#                 .export = c("mat", "trait")) %dopar% {
+#                   beta_funct<-functional.beta.pair(x = mat[c(a,b),],
+#                                                    traits = trait,
+#                                                    index.family = "sorensen")
+#                   fin<-data.frame(Bsor=as.vector(beta_funct$funct.beta.sor),
+#                                   Bsim=as.vector(beta_funct$funct.beta.sim),
+#                                   Bsne=as.vector(beta_funct$funct.beta.sne))
+#                   (fin)
+#                 }
+#   #head(id)
+#   Bsim<-Bsne<-Bsor<-pegar
+#   Bsor[Bsor==TRUE]<-resu$Bsor
+#   Bsim[Bsim==TRUE]<-resu$Bsim
+#   Bsne[Bsne==TRUE]<-resu$Bsne
+#   return(list(Bsor=as.dist(Bsor),
+#               Bsim=as.dist(Bsim),
+#               Bsne=as.dist(Bsne)))
+# }
+# 
+# 
+# system.time(beta_funct<-functional.beta.pair(x = fish_mat_trait[1:5,],
+#                                      traits = pca_trait$x[,1:3],
+#                                      index.family = "sorensen"))
+# system.time(resu<-BsimParallel(mat=fish_mat_trait,trait=pca_trait$x[,1:4]))
+# 
+# 
+# library(betapart)
+# system.time(beta_funct<-functional.beta.pair(x = fish_mat_trait,
+#                                              traits = pca_trait$x[,1:2],
+#                                              index.family = "sorensen"))
+# 
+# write.table(x = as.matrix(beta_funct$funct.beta.sim),
+#             file="BetaFunct/BetaFuncSim_3D_filledNAtrait_SBrosse_2020_05_15.csv",
+#             sep=";")
+# write.table(x = as.matrix(beta_funct$funct.beta.sor),
+#             file="BetaFunct/BetaFuncSor_3D_filledNAtrait_SBrosse_2020_05_15.csv",
+#             sep=";")
+# write.table(x = as.matrix(beta_funct$funct.beta.sne),
+#             file="BetaFunct/BetaFuncSne_3D_filledNAtrait_SBrosse_2020_05_15.csv",
+#             sep=";")
+```
+
+```{r}
+
+beta_funct<-list(beta.sim=NA,beta.sor=NA,beta.sne=NA)
+beta_funct$beta.sim=as.dist(
+  read.table("BetaFunct/4D_BetaFuncSim_filledNAtrait_SBrosse_2021_01_26.csv",
+           sep=";")
+  )
+beta_funct$beta.sor=as.dist(
+  read.table("BetaFunct/4D_BetaFuncSor_filledNAtrait_SBrosse_2021_01_26.csv",
+           sep=";")
+  )
+beta_funct$beta.sne=as.dist(
+  read.table("BetaFunct/4D_BetaFuncSne_filledNAtrait_SBrosse_2021_01_26.csv",
+           sep=";")
+  )
+
+
+
+plot(DsorPhylo$phylo.beta.sim,beta_funct$beta.sim)
+cor.test(DsorPhylo$phylo.beta.sim,beta_funct$beta.sim)
+
+#taxo vs funct
+summary(as.vector(beta_funct$beta.sim))
+sd(as.vector(beta_funct$beta.sim))
+plot(D_fish$beta.sim,beta_funct$beta.sim)
+cor.test(D_fish$beta.sim,beta_funct$beta.sim)
+
+#PCDp vs funct
+plot(D_PCDp,beta_funct$beta.sim)
+cor.test(D_PCDp,beta_funct$beta.sim)
+
+#funct vs Phylo30k
+plot(PBsim,beta_funct$beta.sim)
+cor.test(PBsim,beta_funct$beta.sim)
+```
+
+
+
+
+\pagebreak
+
+# Charging species richness and attributes of basins
+```{r}
+##Richness and endemic species
+##Charging the complete data set.
+fish=read.csv(
+  paste("StatistiquesSubBasinAmazon_02052016/NewData_2017_04/PhysicalData_0417.csv",
+        sep=""),
+  sep=";",header=T)
+
+summary(fish)
+colnames(fish)[1] <- "basin"
+
+
+#nested according to Pebas source
+#information from Hoorn et al. 2010
+fish$PebasLake <- 0
+fish$PebasLake[grep("Pebas",fish$X23Ma)] <- 1
+head(fish[,c("X23Ma","PebasLake")],20)
+
+head(fish)
+fish[,c("basin",'PebasLake',"X23Ma","X23ma_cd")]
+
+
+```
+
+
+```{r}
+fish$PebasConec<-"Other"
+fish$PebasConec[grep("Pebas",fish$X23Ma)] <- "Pebas"
+
+#creating new variable based on past connection
+conec <- data.frame(basin=fish$basin,
+                    ma23 = as.numeric(factor(fish$X23Ma)),
+                    ma10 = as.numeric(factor(fish$X10Ma)),
+                    Pebas = fish$PebasConec)
+
+#code expressing Basin Links to Pebas basin
+matPebas23Mya <- matrix(0,ncol=97,nrow=97,dimnames = list(fish$basin,fish$basin))
+matPebas23Mya[1:10,1:10]
+#matPebas23Mya["Abuna","Abuna"]
+for(i in unique(fish$basin)){
+  for(k in unique(fish$basin)){
+    #i="Abuna";k="Apurimac1"    #Pebas-Pebas
+    #i="Abuna";k="Teles_Pires"  #Pebas-NonPebas
+    #i="Xingu3";k="Teles_Pires" ##NonPebas-NonPebas
+    II<-as.vector(conec[conec$basin==i,"Pebas"])
+    KK<-as.vector(conec[conec$basin==k,"Pebas"])
+    if((II == KK)  & (II == "Pebas")){
+      matPebas23Mya[i,k]<-1 #Pebas-Pebas
+    } else {
+      if((II == KK)  & (II != "Pebas")){
+      matPebas23Mya[i,k]<-0 #NonPebas-NonPebas
+    } else {
+      matPebas23Mya[i,k]<-0 #Pebas-NonPebas
+    }
+    }
+  }
+}
+
+
+#connectivity at 23ma
+mat23 <- matrix(0,ncol=97,nrow=97,dimnames = list(fish$basin,fish$basin))
+mat23[1:10,1:10]
+lapply(1:length(unique(conec$ma23)),function(x){
+  b <- conec[conec$ma23==x,"basin"]
+  mat23[b,b] <<- 1
+})
+
+#connectivity at 10ma
+mat10 <- matrix(0,ncol=97,nrow=97,dimnames = list(fish$basin,fish$basin))
+mat10[1:10,1:10]
+lapply(1:length(unique(conec$ma10)),function(x){
+  b <- conec[conec$ma10==x,"basin"]
+  mat10[b,b] <<- 1
+})
+
+#conectivity at 0ma
+library(igraph)
+g <- graph.formula(Amazon1-Jari,Amazon1-Xingu1,Amazon1-Amazon2,Bacaja-Xingu1,Xingu3-Xingu1,Iriri-Xingu1,Fresco-Xingu3,Xingu4-Xingu3,Xingu4-Xingu6,Amazon2-Paru_Este,Amazon2-Curua_Una,Amazon2-Tapajos1,Amazon2-Curua,Amazon2-Amazon5,Trombetas1-Amazon5,Trombetas1-Nhamunda,Chapare-Grande,Mamore2-Grande,Mamore2-Isiboro,Mamore2-Yacuma,Beni-Madre_Dios,Orthon-Madre_Dios,Madera6-Madre_Dios,Madera6-Mamore1,Mamore2-Mamore1,Guapore-Mamore1,Guapore-Itonamas,Guapore-Blanco_Baures,Tapajos1-Jamanxim,Tapajos1-Tapajos2,Teles_Pires-Tapajos2,Juruena1-Tapajos2,Juruena1-Arinos,Negro3-Negro5,Negro3-Uaupes,Negro3-Negro2,Demini-Negro2,Branco-Negro2,Unini-Negro2,Negro1-Negro2,Jatapu-Uatuma1,Amazon5-Uatuma1,Amazon8-Uatuma1,Curaray-Napo2,Napo1-Napo2,Apaporis-Caqueta1,Japura1-Caqueta1,Abuna-Madera6,Abuna-Madera4,Purus2-Purus3,Purus2-Purus1,Candeias-Madera4,Jiparana-Madera4,Madera3-Madera4,Jiparana-Madera3,Marmelos-Madera3,Madera2-Madera3,Madera2-Marmelos,Maranon5-Santiago,Maranon5-Maranon3,Maranon3-Santiago,Maranon3-Pastaza,Maranon3-Huallaga,Maranon3-Maranon1,Huallaga-Maranon1,Apurimac1-Mantaro-Ucayali2,Urubamba-Ucayali2,Pachitea-Ucayali1-Ucayali2,Maranon1-Ucayali1-Solimoes9,Maranon1-Tigre,Napo1-Solimoes8-Solimoes9,Javary1-Solimoes7-Solimoes8,Putumayo-Solimoes4-Solimoes7,Jutai-Solimoes4,Jurua1-Solimoes4,Tefe-Solimoes4,Solimoes3-Solimoes4-Japura1,Aripuana-Roosevelt,Amazon5-Andira1,Amazon5-Amazon8,Andira1-Maues,Andira1-Canuma,Amazon8-Amazon9,Madera1-Amazon9,Madera1-Luna,Aripuana-Madera1-Madera2,Amazon9-Negro1-Solimoes1,Purus1-Solimoes1-Solimoes2,Coari-Solimoes2-Solimoes3,Japura1-Solimoes3,Tapaua-Purus1-Purus2)
+V(g)$label.cex=0.4
+plot(g,layout=layout_with_kk,vertex.size=7)
+
+m <- as_adj(g);rm(g)
+mat0 <- as.matrix(m);rm(m)
+mat0 <- mat0[sort(rownames(mat0)),sort(colnames(mat0))]
+
+
+all.equal(rownames(mat0),colnames(mat0))
+
+
+#do they have the same structure?
+all.equal(dim(mat0),dim(mat10))
+all.equal(dim(mat0),dim(matPebas23Mya))
+#row names
+colnames(mat0)[!colnames(mat0) %in% colnames(mat10)]
+colnames(mat10)[!colnames(mat10) %in% colnames(mat0)]
+all.equal(rownames(mat0),rownames(mat10))
+all.equal(rownames(mat0),rownames(mat23))
+all.equal(rownames(mat0),rownames(matPebas23Mya))
+#col names
+all.equal(colnames(mat0),colnames(mat10))
+all.equal(colnames(mat0),colnames(mat23))
+all.equal(colnames(mat0),colnames(matPebas23Mya))
+
+
+
+#This index is different from the one at the Richness analysis
+D_conec <- as.dist(mat0+mat10+mat23)
+
+
+rm(mat10,mat23)
+```
+
+
+\pagebreak
+
+# Preparing environmental data
+
+We have two measures of habitat diversity. The first is the surface of the sub-drainage basins, and the second is a direct measure of habitat diversity derived from the relative cover of 14 habitat types found in each sub-drainage. It is widely accepted that, compared to small ones, larger habitats/islands can support larger populations, have higher habitat diversity, and have more barriers to dispersal, thus increasing speciation probability, decreasing extinction probability and supporting more species richness `r citep( c("10.1086/650369","10.1111/jbi.12228") )`.
+
+
+## Calculating *Habitat diversity*
+
+We extract vegetation maps from GIS layers^[see http://worldgrids.org/doku.php?id=wiki:layers#land_cover_and_land_use for a list of availible layers] and calculate the relative cover of each vegetation type in each sub-dranainage. With the matrix of relative cover per sub-drainages, we applied the *Shannon diversity index* to calcule a measure of habitat diversity based on the vegetation cover. This index is valuable because it generates continuous positive values that can be directly incorporated in statistical analysis^[The higher the diversity values, the higher the habitat diversity in the sub-drainage].
+
+```{r}
+habitat=read.csv(paste(                      "StatistiquesSubBasinAmazon_02052016/Statistiques/GlobLandCover.csv",
+                       sep=""),
+                 sep=";",header=T)
+
+#setting rownames
+rownames(habitat) <- habitat$basin
+dim(habitat)
+head(habitat)
+
+#does the sum of categories sum up 1?
+summary(rowSums(habitat[ , -1]))#ok
+
+#creating diversity of habitat
+head(habitat[ , -1])
+habitat2<-habitat
+habitat$ShannonDiv <- vegan::diversity(habitat[ , -1],index = "shannon")
+summary(habitat$ShannonDiv)
+
+#diversity of habitat
+habitat <- habitat[, c("basin", "ShannonDiv") ]
+head(habitat)
+
+#merging to fish data set
+fish <- merge(fish,habitat,by="basin")
+
+# #data control
+# comp <- fish
+
+write.csv(habitat,file = "comparingResults/habitat.csv")
+rm(habitat)
+```
+
+
+\pagebreak
+
+## Soil diversity
+
+We used the soil classification (from Soil and Terrain Database for Latin America and the Caribbean^[**http://geonode.isric.org/layers/geonode:soter_lac_map_unit**]) of the whole drainage basin to calculate a index of soil (i.e., geological) diversity. For such, we estimated the proportional cover of each soil type in each subdrainage and used the proportions to calculate the Shannon diversity index (exactly as Habitat diversity).
+
+```{r}
+soil=read.csv(paste(                   "StatistiquesSubBasinAmazon_02052016/Soil_2017_04/",
+                    "SoilLithoData/SoterlacLithology.csv",
+                       sep=""),
+                 sep=";",header=T)
+soil[is.na(soil)] <- 0
+rownames(soil) <- soil$basin
+head(soil)
+
+#checking whether the categories sum up 1
+sort(rowSums(soil[,-1]),decreasing=T)#perfect
+
+Soil2<-soil
+soil$SoilDiv <- vegan::diversity(soil[,-1],index = "shannon")
+summary(soil$SoilDiv)
+plot(soil$SoilDiv)
+
+#diversity of soil geology
+soil <- soil[, c("basin", "SoilDiv") ]
+
+#merging to fish data set
+fish <- merge(fish,soil,by="basin")
+
+write.csv(soil,file = "comparingResults/soil.csv")
+rm(soil)
+```
+
+\pagebreak
+
+## Global terrain slope (potential waterfalls)
+
+We used the an estimation of slope between pixel (from Global Terrain Slope and Aspect Data^[**http://webarchive.iiasa.ac.at/Research/LUC/External-World-soil-database/HTML/global-terrain-slope.html**]) of the whole drainage basin to calculate the percentage of area within each cathegory of slope (0–0.5%, 0.5–2%, 2–5%, 5–8%, 8–16%, 16–30%, 30–45%, and > 45%). 
+As the data set is presente as a matrix of surface cover (summing up 1 between cathegories), we opted to sum up classes 16–30%, 30–45%, and > 45% to compose a new variable.
+
+```{r}
+slope=read.csv(paste(                      "StatistiquesSubBasinAmazon_02052016/",
+                    "Slope_Waterfall/Slope.csv",
+                       sep=""),
+                 sep=";",header=T)
+slope[is.na(slope)] <- 0
+rownames(slope) <- slope$basin
+head(slope)
+
+#checking whether the categories sum up 1
+table(round(rowSums(slope[,-1]),1))#perfect
+
+#defyning classes
+slope$CSup15 <- rowSums(slope[,c("C15_30","C30_45","CSup45")])
+slope$CBelow15 <- rowSums(slope[,c("C0_05","C05_2","C2_5","C5_10","C10_15")])
+
+
+#diversity of soil geology
+slope <- slope[, c("basin", "CSup15","CBelow15") ]
+
+#merging to fish data set
+fish <- merge(fish,slope,by="basin")
+
+write.csv(slope,file = "comparingResults/slope.csv")
+
+rm(slope)
+```
+
+
+
+\pagebreak
+
+## Current climate
+
+Charging all data set.
+```{r}
+Cclimate=read.csv(paste( "StatistiquesSubBasinAmazon_02052016/Statistiques/climatology_present.csv",
+                       sep=""),
+                 sep=",",header=T)
+
+dim(Cclimate)
+# names(Cclimate)
+Cclimate[1:10,1:7]
+
+#setting row names
+rownames(Cclimate) <- Cclimate$BvNiv2
+
+#is everything ok? NAs, NaN values, Extreme values?
+# summary(Cclimate)
+#OK
+```
+
+Now, let's select the most important variables based on `r citep("10.1111/j.1461-0248.2011.01589.x")`. They showed that the following variables are important.
+
+```{r}
+#separating variables
+#Temperature: I must divide by 10 to get the right temperature
+#Mean temperature of the coldest month
+tempMin <- Cclimate$bio_mn6/10
+#Mean temperature of the warmest month
+tempMax <- Cclimate$bio_mn5/10
+#Annual mean temperature
+tempMean <- Cclimate$bio_mn1/10
+#Coefficient of variation of mean monthly temperature
+tempCV <- Cclimate$bio_mn4/1000
+
+temp2 <- data.frame(tempMin,tempMax,tempMean,
+                    tempCV);rm(tempMin,tempMax,tempMean,tempCV)
+temp2$basin <- Cclimate$BvNiv2
+head(temp2)
+summary(temp2)
+
+
+#precipitation
+#Precipitation of the driest month
+precMin <- Cclimate$bio_mn14
+#Precipitation of the wettest month
+precMax <- Cclimate$bio_mn13
+#Anual precipitation
+precAnn <- Cclimate$bio_mn12
+#Coefficient of variation of mean monthly precipitation
+precCV <- Cclimate$bio_mn15
+prec2 <- data.frame(precMin,precMax,precAnn,
+                    precCV);rm(precMin,precMax,precAnn,precCV)#
+prec2$basin <- Cclimate$BvNiv2
+head(prec2)
+summary(prec2)
+
+
+#solar radiation
+#Mean Anual solar radiation
+SolRad_mn <- Cclimate$solrad_mn13
+#Coefficient of variation of anual solar radiation
+SolRad_cv <- Cclimate$solrad_cv13
+solRad <- data.frame(SolRad_mn,SolRad_cv);rm(SolRad_mn,SolRad_cv)
+solRad$basin <- Cclimate$BvNiv2
+head(solRad)
+summary(solRad)
+
+
+#Actual evapotranspiration
+vari <- c("aet_mn1","aet_mn2","aet_mn3","aet_mn4","aet_mn5",
+              "aet_mn6","aet_mn7","aet_mn8","aet_mn9","aet_mn10",
+          "aet_mn11","aet_mn12")
+aet <- Cclimate[, vari]
+#Aet minimum
+aetMin <- apply(aet,1,function(x)min(x,na.rm=TRUE)) 
+#Aet maximum
+aetMax <- apply(aet,1,function(x)max(x,na.rm=TRUE))
+#Annual Aet
+aetAnn <- rowSums(aet)
+#Coefficient of variation of monthly aet
+aetCV <- apply(aet,1,function(x)sd(x,na.rm=TRUE)/mean(x,na.rm=TRUE))
+aet2 <- data.frame(aetMin,aetMax,aetAnn,
+                   aetCV);rm(aetMin,aetMax,aetAnn,aetCV)
+aet2$basin <- Cclimate$BvNiv2
+head(aet2)
+summary(aet2)
+rm(aet,vari)
+
+
+#Potential evapotranspiration
+vari <- c("pet_mn1","pet_mn2","pet_mn3","pet_mn4","pet_mn5",
+              "pet_mn6","pet_mn7","pet_mn8","pet_mn9","pet_mn10",
+          "pet_mn11","pet_mn12")
+pet <- Cclimate[, vari]
+#Pet minimum
+petMin <- apply(pet,1,function(x)min(x,na.rm=TRUE)) 
+#Pet maximum
+petMax <- apply(pet,1,function(x)max(x,na.rm=TRUE))
+#Annual Pet
+petAnn <- rowSums(pet)
+#Coefficient of variation of monthly pet
+petCV <- apply(pet,1,function(x)sd(x,na.rm=TRUE)/mean(x,na.rm=TRUE))
+pet2 <- data.frame(petMin,petMax,petAnn,
+                   petCV);rm(petMin,petMax,petAnn,petCV)
+pet2$basin <- Cclimate$BvNiv2
+head(pet2)
+summary(pet2)
+rm(pet,vari)
+```
+
+
+
+## Current Runoff
+
+We will calculate runoff as a mean value from two different models
+```{r}
+#Runoff UNH
+unh=read.csv(paste( "StatistiquesSubBasinAmazon_02052016/Statistiques/ro_unh_cmp.csv",
+                       sep=""),
+                 sep=",",header=T)
+
+#Mean Annual runoff
+ro_unh <- unh[,c("BvNiv2","rounhcmp_mn13")];rm(unh)
+
+
+#Runoff Quest
+quest=read.csv(paste("StatistiquesSubBasinAmazon_02052016/Statistiques/ro_quest.csv",
+                       sep=""),
+                 sep=",",header=T)
+
+#Mean Annual runoff
+ro_quest <- data.frame(BvNiv2=quest$BvNiv2,ro_quest=rowSums(quest[,paste("roqst_mn",1:12,sep="")])); rm(quest)
+
+
+#merging and computing mean model values
+ro <- merge(ro_unh,ro_quest, by='BvNiv2'); rm(ro_unh,ro_quest)
+colnames(ro)[1] <- "basin"
+
+ro$ro_mean <- rowMeans(ro[,-1])
+ro <- ro[,c("basin","ro_mean")]
+
+head(ro)
+```
+
+## Net Primary Productivity
+
+Here we charge Net Primary Productivity. We will use the **mean**, **standard deviation**, and **coeffient of variation** of NPP in each basin between 2000-2006.
+
+```{r}
+npp=read.csv(paste("StatistiquesSubBasinAmazon_02052016/Statistiques/npp_present.csv",
+                       sep=""),
+                 sep=",",header=T)
+
+head(npp)
+
+#setting variables
+npp <- npp[,c("BvNiv2","MEAN","STD","cv")]
+colnames(npp) <- c("basin","npp_mn","npp_sd","npp_cv")
+rownames(npp) <- npp$basin
+head(npp)
+```
+
+
+
+### Combining all variables from current climate in a single *data.frame*
+
+Then, we have to combine to whole data set. Column binding process has been done based on the subdrainage labels.  
+First, we standardize all variables so that they all have zero mean and unity standard deviation. The next step is to sepparate different variables related to energy, availability of water and temperature hypotheses. For each of these groups, we calculated **Distances Matrices** based on **Euclidean distance**.
+
+```{r}
+# merging all data.frames
+current_climate <- merge(temp2,prec2,by="basin")
+current_climate <- merge(current_climate,aet2,by="basin")
+current_climate <- merge(current_climate,pet2,by="basin")
+current_climate <- merge(current_climate,ro,by="basin")
+current_climate <- merge(current_climate,npp,by="basin")
+current_climate <- merge(current_climate,solRad,by="basin")
+head(current_climate)
+
+#naming rows and excluding dummy variable from data.frame
+rownames(current_climate) <- current_climate$basin
+current_climate <- current_climate[,!colnames(current_climate)%in%c("basin")]
+head(current_climate)
+write.csv(current_climate,file = "comparingResults/current_climate.csv")
+
+# Standard function (centering and reducing; see first chunk)
+current_climate_s <- data.frame(apply(current_climate,2,Standard))
+rownames(current_climate_s)<-rownames(current_climate)
+colMeans(current_climate_s)#OK
+apply(current_climate_s,2,sd)#OK
+
+#setting preditor' names
+colnames(current_climate_s) <- paste(colnames(current_climate_s),".s",sep="")
+current_climate_s$basin <- rownames(current_climate_s)
+
+# naming rows and checking the final dataset
+head(current_climate_s)
+summary(current_climate_s)
+write.csv(current_climate_s,file = "comparingResults/current_climate_s.csv")
+
+
+##########################################################
+## separating variables according to ecological hypotheses
+##########################################################
+#water = Precipitation + Runoff
+vari <- c("precMin.s","precMax.s","precAnn.s","precCV.s", "ro_mean.s")
+# summarizing current climate in a Distance matrix
+D_water <- dist(current_climate_s[,vari])
+res <- prcomp(current_climate_s[,vari],center = F, scale. = F)
+biplot(res,main="water = Precipitation + Runoff")
+rm(res);rm(vari)
+
+
+#Temperature = Temperature + Solar Radiation
+vari <- c("tempMin.s","tempMax.s","tempMean.s","tempCV.s",
+          "SolRad_cv.s","SolRad_mn.s")
+# summarizing in a few PCA axes
+D_temp <- dist(current_climate_s[ , vari])
+res <- prcomp(current_climate_s[,vari],center = F, scale. = F)
+biplot(res,main="Temperature = Temperature + Solar Radiation")
+rm(res);rm(vari)
+
+
+#Energie = AET + PET + NPP
+vari <- c("aetMin.s","aetMax.s","aetAnn.s","aetCV.s",
+          "petMin.s","petMax.s","petAnn.s","petCV.s",
+          "npp_mn.s","npp_sd.s","npp_cv.s")
+# summarizing in a few PCA axes
+D_energ <- dist(current_climate_s[ , vari])
+res <- prcomp(current_climate_s[,vari],center = F, scale. = F)
+biplot(res,main="Energie = AET + PET + NPP")
+rm(res);rm(vari)
+
+rm(temp2,prec2,aet2,pet2,Cclimate,ro,npp,solRad)
+```
+
+\pagebreak
+
+## Past climate
+
+Now, it's time to deal with past climate variables. We first charge data from all past climatic models, separate all mean variables related to temperature and precipitation, aggregate them, and finally calculate the **Euclidean dissimilarity matrix**.
+
+### CCSM
+```{r}
+#Clima LGM : CCSM model
+ccsm=read.csv(paste(       "StatistiquesSubBasinAmazon_02052016/Statistiques/climatology_lgm_ccsm.csv",
+                       sep=""),
+                 sep=",",header=T)
+
+# Setting CCSM row names
+rownames(ccsm) <- ccsm$BvNiv2
+
+#let's consider only annual variables
+#temperature: I must divide by 10 to get the right temperature
+#Mean temperature of the coldest month
+tempMin <- ccsm[,"bio_mn6"]/10 
+#Mean temperature of the warmest month
+tempMax <- ccsm[,"bio_mn5"]/10
+#Annual mean temperature
+tempMean <- ccsm[,"bio_mn1"]/10
+#Temprerature sazonality
+tempCV <- ccsm[,"bio_mn4"]/1000 #I must divide by 1000 to get the right CV
+
+temp_ccsm <- data.frame(tempMin,tempMax,tempMean,tempCV);
+rownames(temp_ccsm) <- ccsm$BvNiv2
+rm(tempMin,tempMax,tempMean,tempCV)
+head(temp_ccsm)
+summary(temp_ccsm)
+
+#precipitation
+#Precipitation of the driest month
+precMin <- ccsm[,"bio_mn14"]
+#Precipitation of the wettest month
+precMax <- ccsm[,"bio_mn13"]
+#Annual precipitation
+precAnn <- ccsm[,"bio_mn12"]
+#Coefficient of variation of mean monthly precipitation
+precCV <- ccsm[,"bio_mn15"]
+prec_ccsm <- data.frame(precMin,precMax,precAnn,precCV);
+rownames(prec_ccsm) <- ccsm$BvNiv2
+rm(precMin,precMax,precAnn,precCV)
+head(prec_ccsm)
+summary(prec_ccsm)
+
+
+# do they have the same row sequence?
+temp_ccsm$basin <- rownames(temp_ccsm)
+prec_ccsm$basin <- rownames(prec_ccsm)
+all.equal(temp_ccsm$basin,prec_ccsm$basin) #ok
+
+lgm_ccsm <- merge(temp_ccsm,prec_ccsm,by="basin"); rm(temp_ccsm,prec_ccsm,ccsm)
+summary(lgm_ccsm)
+```
+
+
+### MIROC
+
+```{r}
+#Clima LGM : MIROC model
+miroc=read.csv(paste(         "StatistiquesSubBasinAmazon_02052016/Statistiques/climatology_lgm_miroc.csv",
+                       sep=""),
+                 sep=",",header=T)
+
+# Setting row names
+rownames(miroc) <- miroc$BvNiv2
+
+#let's consider only annual variables
+#temperature: I must divided by 10 to get the right temperature
+#Mean temperature of the coldest month
+tempMin <- miroc[,"bio_mn6"]/10
+#Mean temperature of the warmest month
+tempMax <- miroc[,"bio_mn5"]/10
+#Annual mean temperature
+tempMean <- miroc[,"bio_mn1"]/10
+#Coefficient of variation of mean monthly temperature
+tempCV <- miroc[,"bio_mn4"]/1000
+temp_miroc <- data.frame(tempMin,tempMax,tempMean,tempCV);
+rownames(temp_miroc) <- miroc$BvNiv2
+rm(tempMin,tempMax,tempMean,tempCV)
+head(temp_miroc,10)
+
+
+#precipitation
+#Precipitation of the driest month
+precMin <- miroc[,"bio_mn14"]
+#Precipitation of the wettest month
+precMax <- miroc[,"bio_mn13"]
+#Anual precipitation
+precAnn <- miroc[,"bio_mn12"]
+#Coefficient of variation of mean monthly precipitation
+precCV <- miroc[,"bio_mn15"]
+prec_miroc <- data.frame(precMin,precMax,precAnn,precCV);
+rownames(prec_miroc) <- miroc$BvNiv2
+rm(precMin,precMax,precAnn,precCV)
+head(prec_miroc,5)
+
+
+# do they have the same row sequence?
+temp_miroc$basin <- rownames(temp_miroc)
+prec_miroc$basin <- rownames(prec_miroc)
+all.equal(temp_miroc$basin,prec_miroc$basin) #ok
+
+lgm_miroc <- merge(temp_miroc,prec_miroc,by="basin"); rm(temp_miroc,prec_miroc)
+head(lgm_miroc)
+summary(lgm_miroc)
+
+rm(miroc)
+```
+
+
+
+### MPI model
+
+```{r}
+#Clima LGM : MPI model
+mpi=read.csv(paste(         "StatistiquesSubBasinAmazon_02052016/Statistiques/climatology_lgm_mpi.csv",
+                       sep=""),
+                 sep=",",header=T)
+
+# head(mpi)
+rownames(mpi) <- mpi$BvNiv2
+
+#temperature: I must divide by 10 to get the right temperature
+#Mean temperature of the coldest month
+tempMin <- mpi[,"bio_mn6"]/10
+#Mean temperature of the warmest month
+tempMax <- mpi[,"bio_mn5"]/10
+#Annual mean temperature
+tempMean <- mpi[,"bio_mn1"]/10
+#Coefficient of variation of mean monthly temperature
+tempCV <- mpi[,"bio_mn4"]/1000
+temp_mpi <- data.frame(tempMin,tempMax,tempMean,tempCV);
+rownames(temp_mpi) <- mpi$BvNiv2
+rm(tempMin,tempMax,tempMean,tempCV)
+
+
+#precipitation
+#Precipitation of the driest month
+precMin <- mpi[,"bio_mn14"]
+#Precipitation of the wettest month
+precMax <- mpi[,"bio_mn13"]
+#Anual precipitation
+precAnn <- mpi[,"bio_mn12"]
+#Coefficient of variation of mean monthly precipitation
+precCV <- mpi[,"bio_mn15"]
+prec_mpi <- data.frame(precMin,precMax,precAnn,precCV);
+rownames(prec_mpi) <- mpi$BvNiv2
+rm(precMin,precMax,precAnn,precCV)
+
+# do they have the same row sequence?
+temp_mpi$basin <- rownames(temp_mpi)
+prec_mpi$basin <- rownames(prec_mpi)
+all.equal(temp_mpi$basin,prec_mpi$basin) #ok
+
+lgm_mpi <- merge(temp_mpi,prec_mpi,by="basin"); rm(temp_mpi,prec_mpi)
+head(lgm_mpi)
+summary(lgm_mpi)
+
+rm(mpi)
+```
+
+
+
+### Mean variables of LGM models
+
+The first thing is to verify that all data frames from different climatic models have the same sequence of rows and columns. Let's check whether or not this is the case.
+```{r}
+#all pairwise comparisons of ROW names
+all.equal(lgm_miroc$basin,lgm_ccsm$basin)#ok
+all.equal(lgm_miroc$basin,lgm_mpi$basin)#ok
+all.equal(lgm_ccsm$basin,lgm_mpi$basin)#ok
+
+#all pairwise comparisons of COLLUMN names
+all.equal(colnames(lgm_miroc), colnames(lgm_ccsm) )#ok
+all.equal(colnames(lgm_miroc), colnames(lgm_mpi) )#ok
+all.equal(colnames(lgm_ccsm), colnames(lgm_mpi) )#ok
+```
+
+
+Great, everything is **OK**! As all selected variables from the three LGM models have the same structure, we can produce a mean value for each cell variable by summing and dividing all matrix cells among different data sets^[but excluding the first column that refers to the row names]. 
+
+```{r}
+head(lgm_miroc)
+head(lgm_ccsm)
+head(lgm_mpi)
+
+# excluding the column that refers to the basin name and
+# computing mean values of past climate projections among different models
+lgm_meanModels <- (lgm_miroc[, -1] + lgm_ccsm[, -1] + lgm_mpi[, -1] )/3
+
+rownames(lgm_meanModels) <- lgm_miroc$basin
+head(lgm_meanModels)
+lgm_meanModels <- lgm_meanModels[,!colnames(lgm_meanModels) %in% c("tempCV","precCV")]
+
+write.csv(lgm_meanModels,file = "comparingResults/lgm_meanModels.csv")
+rm(lgm_miroc,lgm_ccsm,lgm_mpi)
+```
+
+
+
+### Computing differences between current and past climate
+
+Now, we are ready to subtract the past projection variables from the current climate to have a table corresponding to changes in climate between the Last Glacial Maximum to the current days.
+
+```{r}
+head(current_climate)
+head(lgm_meanModels)
+
+# do they have the same structure for lines?
+all.equal(rownames(current_climate),rownames(lgm_meanModels))
+
+# Differences between Current and the LGM climate
+head(current_climate [ , colnames(lgm_meanModels)])
+head(lgm_meanModels)
+diff_CurrentLGM <- (current_climate [ , colnames(lgm_meanModels)] - lgm_meanModels)
+summary(diff_CurrentLGM)
+write.csv(diff_CurrentLGM,file = "comparingResults/diff_CurrentLGM.csv")
+
+# Computting Distance Matrix on scaled data
+diff_CurrentLGM_s <- (apply(diff_CurrentLGM,2,Standard))
+rownames(diff_CurrentLGM_s) <- rownames(diff_CurrentLGM)
+colMeans(diff_CurrentLGM_s)#OK
+apply(diff_CurrentLGM_s,2,sd)#OK
+
+#setting predictor' names
+colnames(diff_CurrentLGM_s) <- paste(colnames(diff_CurrentLGM_s),".s",sep="")
+head(diff_CurrentLGM_s)
+
+#PCA (centered and reduced) with differences in variables
+pca_diff <- prcomp(diff_CurrentLGM_s, center = F, scale. = F)
+biplot(pca_diff,main="difference in climate(Current-LGM climate)",
+       cex=0.9)
+
+#Distance
+D_CurrentLGM<- dist(diff_CurrentLGM_s)
+
+#control
+diff_CurrentLGM_s <- data.frame(diff_CurrentLGM_s)
+diff_CurrentLGM_s$basin <- rownames(diff_CurrentLGM_s)
+# comp <- merge(comp,diff_CurrentLGM_s, by="basin")
+
+rm(lgm_meanModels,pca_diff,diff_CurrentLGM,current_climate_s,current_climate)
+```
+
+\pagebreak
+
+## Codding the structure of the drainage basin
+We computed an index to evaluate the effect of tributary position on fish biodiversity. This index is defyned as...
+
+```{r}
+pos=read.csv(paste(      "StatistiquesSubBasinAmazon_02052016/codage_bv2_tributaryPosition_Ago2017.csv",
+                       sep=""),
+                 sep=";",header=T)
+pos
+
+#merging the dataset
+fish <- merge(x=fish,y=pos,by.x="basin",by.y="BvNiv2",all.x=T)
+fish$Codigo<-fish$codage
+
+rm(pos)
+
+```
+
+\pagebreak
+
+## Marine Incursions (5Myr and 1Myr)
+
+We calculated the percentage of each sub-drainage basin under 25m of altitude to represent a potential case of marine incursion. The higher the percentage of basin under this threashold, the higher the chance of being under the sea level during the last 1Myr ago.
+
+```{r}
+mar = read.csv(paste( "StatistiquesSubBasinAmazon_02052016/Marine_Incursion_2018_07/",
+                     "PercElevSbv2_260618.csv",
+                     sep = ""), sep = ";", header = T)
+summary(mar)
+dim(mar)
+
+#new and old basin Names
+fish2=read.csv(paste(                     "StatistiquesSubBasinAmazon_02052016/",
+                     "NewData_2019_10/stat97bv_311019.csv",
+                     sep=""),
+               sep=";",header=T)[,c("Sub_drainage","Basin2stat")]
+dim(fish2)
+head(fish2)
+head(mar)
+
+intersect(sort(mar$BvNiv2),sort(fish2$Basin2stat))
+
+mar<-merge(x=fish2,y=mar,by.x="Basin2stat",by.y="BvNiv2",all.x=TRUE,all.y=TRUE)
+
+mar$Inf25m[is.na(mar$Inf25m)] <- 0
+mar$Ent25_100m[is.na(mar$Ent25_100m)] <- 0
+mar <- mar[, colnames(mar) != c("BvNiv1")]
+cor(log(mar$Inf25m + 1), log(mar$Ent25_100m + 1))
+
+subset(mar,Inf25m!=0)
+
+write.csv(mar, file = "comparingResults/marineIncursions.csv")
+
+#merging marine and fish data set
+intersect(sort(mar$Basin2stat),sort(fish$basin))
+fish<-merge(x=fish,y=mar,by.x="basin",by.y="Basin2stat",all.x=TRUE,all.y=TRUE)
+
+rm(fish2)
+```
+
+
+\pagebreak
+
+## Hydromorphology type
+
+Proportion of Hydrogeomorphology type according to Jezequel et al. "Geomorphological diversity of rivers in the Amazon Basin"
+
+```{r}
+hydro = read.csv(paste(
+  "StatistiquesSubBasinAmazon_02052016/2023_Hydromorphology_Jezequel/",
+                     "2023_05_Types_Hydromorphology_97bv.csv",
+                     sep = ""), sep = ";", header = T)
+summary(hydro)
+dim(hydro)
+
+hydro<-acast(hydro,BvNiv2~MajType,fun.aggregate = sum, value.var = "length_km")
+hydro
+
+hydro <- hydro/rowSums(hydro)
+
+all.equal (fish$basin, rownames(hydro)) # all corresponding names are correct
+
+fish$basin==rownames(hydro) #they are all at the same order
+
+D_hydro<-dist(hydro)
+plot(beta_funct$beta.sim~D_hydro)
+(beta_funct$beta.sim~D_hydro)
+```
+
+
+\pagebreak
+
+
+
+## Habitat variables
+
+### Setting and transforming variables
+
+We will compose current habitat based on a series of variables, namely *River network Density*, *Surface of subdrainage basins (in km^2^)*, *Number of waterfall*, *Mean elevation along subdrainages*, *Elevation range*, and *Percentage of drainage basin above 1000m of altitude*. All continuos variables will be log-transformed (river network, surface, number of waterfalls, mean elevation, and elevation range) and scaled previously (i.e., mean = 0, and sd = 1) so that each variable has the same weight while computing distance matrix. 
+
+*Habitat diversity (i.e., the proportion of vegetation type cover within subdrainages)* will be calculated using the Euclidean difference between proportions in sites.
+*Water type* was coded differently.
+
+We also computed a new variable related to the sampling effort of each subdrainage basin. For such, we divided the number of sampling points by the surface area of subdrainage so that we have a continuous sampling effort measure independent of the size of subdrainages.
+Let's start by separating and transforming variables.
+
+```{r}
+names(fish)
+#tranforming some variables
+fish$Area_log <- log(fish$Area_km+1)
+#there are only a few waterfalls on "Chut_grand", so we opt for "Chut_hydrofall"
+fish$Chut_hydrofall_log <- log(fish$Chut_hydrofall+1)
+fish$ElevRge_log <- log(fish$Elevation_range+1)
+fish$ElevMean_log <- log(fish$Elevation_mean+1)
+fish$ShanDiv_log <- log(fish$ShannonDiv+1)
+fish$CSup15_log <- log(fish$CSup15+1)
+fish$Inf25m_log <- log(fish$Inf25m+1)
+
+#computing sampling effort variable
+fish$SamplingEff <- log(fish$NbSites_0417/fish$Area_km)
+
+```
+
+The variable *Percentage of each basin that is above 1000 meters* (i.e., `Elevation_.basinSup1000m`) is a proportion variable. First, we need to transform it in values between 0-1 by dividing by 100. So, in order to improve linearity, we applied the `arcsin(sqrt(x+1))` transformation. Such transformation has been suggested to deal with this kind of data (see Gotelli 2011; Legendre & Legendre 2012).
+
+```{r}
+fish$ElevPro1000_asin <- asin(sqrt(fish$Elevation_basinSup1000m/100))
+```
+
+We excluded all variables not used in the analyses, and, as a further step, we standardized all variables used in statistical models. **Centering** and **reducing** predictors is important because
+
+* variables are on different scales (km^2^, mm, ^o^C, etc);
+* their range are very different (0-3000, 19-34, 0.1-0.9, etc);
+* thus, coefficients from regression models could not be directly compared as a direct measure of strength.
+
+After centering and reducing predictors, regression coefficients varies on the same scale and can be directly compared as a measure of effect size `r citep("10.1002/sim.3107")`.
+
+```{r}
+# Centering and reducing predictor so that mean=0 and sd=0.5
+vari <- c(
+  #tributary characteristics
+  "NetworkDensity","SamplingEff","DistanceEmbouchure_km",
+  "Area_log","Chut_hydrofall_log","codage",#"Conec_index",
+  "ElevRge_log","ElevMean_log","ElevPro1000_asin","Inf25m_log",
+  "CSup15_log"#,"ShanDiv_log","SoilDiv"
+  )
+
+# Standard function (centering and reducing; see first chunk)
+pred <- data.frame(apply(fish[,vari],2,Standard))
+rownames(pred) <- fish$basin
+colMeans(pred)#OK
+apply(pred,2,sd)#OK
+
+#setting predictor' names
+colnames(pred) <- paste(colnames(pred),".s",sep="")
+pred$basin <- rownames(pred)
+
+# fish <- fish[,!colnames(fish)%in%vari]
+
+#combining fish biological data with transformed predictors
+fish <- merge(fish,pred,by="basin")
+summary(fish)
+
+#setting rownames
+rownames(fish) <- fish$basin
+
+rm(pred,vari)
+```
+
+
+### Computing dissimilarity matrices
+
+Now it's time to compute dissimilarity matrix for Current habitat variables. For most of habitat variables, we will use the *Euclidean* distance to calculate dissimilarity among sampling sites. As water color is categorical (three levels: white, black, and clear), we used our own function to calculate the dissimilarity matrix. The rationale for WaterColor distance matrix is if two sites have exactly the same water type, we coded them 1; if their water type differ, them the code is 0. Therefore, we expected low fish dissimilarity levels among subdrainages with the same water types (conversely, high similarity among subdrainages with the same water type).
+```{r}
+vari <- c(
+  "NetworkDensity.s","Area_log.s"#"DistanceEmbouchure_km.s",#"codage.s",
+  #"ShanDiv_log.s","SoilDiv.s"
+  )#"ElevRge_log.s"
+#Euclidean distance
+D_Habitat_size <- dist(fish[,vari])
+rm(vari)
+
+#positioning
+vari <- c("DistanceEmbouchure_km.s","codage.s")
+#Euclidean distance
+D_Habitat_position <- dist(fish[,vari])
+
+
+#Habitat fragmentation = NumberWaterfalls
+vari <- c("Chut_hydrofall_log.s")
+D_Habitat_fragm <- dist(fish[,vari,drop=FALSE])
+rm(vari)
+
+
+#Habitat harshness = Elevation + CSum_15_log.s
+vari <- c("CSup15_log.s",
+          "ElevMean_log.s","ElevRge_log.s","ElevPro1000_asin.s")
+D_Habitat_harsh <- dist(fish[,vari])
+rm(vari)
+# plot(D_Habitat_harsh~D_Habitat_fragm)
+# cor(as.vector(D_Habitat_harsh),as.vector(D_Habitat_fragm))
+
+
+
+##Habitat Diversity and Soil diversity
+habitat2$basin
+Soil2$basin
+table(rownames(habitat2)==fish$basin)
+table(rownames(Soil2)==fish$basin)
+
+D_Habitat_Div<-dist(cbind(habitat2[,-1],Soil2[,-1]))
+
+
+#Water color: if both sites have the same water color = 0, otherwise = 1
+vari <- c("WaterColor")
+mat_hab <- data.frame(WC=fish[,vari])
+rownames(mat_hab) <- rownames(fish)
+head(mat_hab,10)
+
+#code expressing Basin Water Color similar to to Pebas basin
+WaterColor <- matrix(0,ncol=97,nrow=97,dimnames = list(fish$basin,fish$basin))
+WaterColor[1:10,1:10]
+for(i in unique(fish$basin)){
+  for(k in unique(fish$basin)){
+    #i="Abuna";k="Apurimac1"    #White-White
+    #i="Abuna";k="Teles_Pires"  #White-Clear
+    #i="Xingu3";k="Negro1" ##Clear-Black
+    II<-as.vector(mat_hab[i,"WC"])
+    KK<-as.vector(mat_hab[k,"WC"])
+    if((II == KK)  ){ #same Water Color
+      WaterColor[i,k]<-1
+    } else { #any distinct Water Color combination
+      WaterColor[i,k]<-0 
+    }
+  }
+}
+
+D_Habitat_water <- as.dist(WaterColor)
+rm(vari, mat_hab,II,KK,WaterColor)
+
+
+
+
+#Sampling effort = log(Density of sampling sites per subdrainage)
+vari <- c("SamplingEff.s")
+mat_hab <- as.data.frame(fish[,vari])
+rownames(mat_hab) <- rownames(fish)
+D_Habitat_SampEff <- dist(mat_hab)
+rm(vari, mat_hab)
+
+#marine incursion
+vari <- c("Inf25m")
+mat_hab <- as.data.frame(fish[,vari])
+rownames(mat_hab) <- rownames(fish)
+colnames(mat_hab) <- "Inf25m"
+D_Marine_Incurs <- dist(mat_hab)
+
+rm(vari, mat_hab)
+
+```
+
+
+
+
+
+
+\pagebreak
+
+
+# Past-Connectivity among subdrainages as a Palaeo-Connectivity matrix
+
+The geological history of Amazon basin has been depicted in a recent research paper`r citep("10.1126/science.1194585")`. We extracted information on past connectivity among subdrainages in two time slices (10million years ago, and 23mya). Then, we used this past connectivity information to construct a binary connectivity matrix depicting history. For such, we need to first create an empty matrix with row and column names corresponding to the current subdrainages, and then we use information from palaeo-connection to fill matrix cells for those subdrainages that were connected 10mya.
+
+```{r}
+#information from Hoorn et al. (2010)
+#creating new variable based on past connection
+#subbasins with the same number were connected
+conec <- data.frame(basin=fish$basin,
+                    ma23 = as.numeric(as.factor(fish$X23Ma)),
+                    ma10 = as.numeric(as.factor(fish$X10Ma)))
+head(conec,40)
+
+#connectivity at 23ma
+mat23 <- matrix(0,ncol=97,nrow=97,dimnames = list(fish$basin,fish$basin))
+mat23[1:10,1:10]
+```
+
+```{r}
+unlist(lapply(seq_along(unique(conec$ma23)),function(x){
+  b <- conec[conec$ma23==x,"basin"]
+  mat23[b,b] <<- 1
+  rm(b)
+  return()
+}))
+```
+
+```{r}
+#the result
+mat23[1:10,1:10]
+```
+
+```{r}
+#connectivity at 10ma
+mat10 <- matrix(0,ncol=97,nrow=97,dimnames = list(fish$basin,fish$basin))
+mat10[1:10,1:10]
+```
+
+```{r}
+unlist(lapply(seq_along(unique(conec$ma10)),function(x){
+  b <- conec[conec$ma10==x,"basin"]
+  mat10[b,b] <<- 1
+  rm(b)
+  return()
+}))
+```
+
+```{r}
+#the result
+mat10[1:10,1:10]
+```
+
+Now we transform these square matrices in **dist** objects so that we can proceed with dissimilarity analysis.
+```{r}
+D_pastConnect <- list(C0mya=as.dist(mat0),
+                      C10mya = as.dist(mat10),
+                      C23mya = as.dist(mat23),
+                      Pebas23mya = as.dist(matPebas23Mya))
+
+rm(mat10,mat23,conec)
+```
+
+
+
+\pagebreak
+
+
+# Charging *Spatial Distance Matrix*
+
+We computed the distance among pairs of subdranages following the riverine connections among them. We use such spatial matrix connectivity to create *distance-decay plots*. Charging the spatial matrix:
+
+```{r}
+spa_mat=read.csv(paste(
+  "StatistiquesSubBasinAmazon_02052016/DistanceMatrixRiver.csv",
+                       sep=""),
+                 sep=";",header=T)
+
+#setting matrix row names and colum
+rownames(spa_mat) <- spa_mat$MatriceDistance_km
+spa_mat <- spa_mat[,-c(1)]/1000 #to give distance in Km
+
+#checking rownames and colnames order
+all.equal(rownames(spa_mat),colnames(spa_mat))#ok!
+
+#checking lower and upper triangles
+table(as.dist(spa_mat)==as.dist(t(spa_mat)) )#ok!
+
+```
+
+Now, we separate only those river subdrainages used in the modelling:
+```{r}
+spa_mat <- spa_mat[rownames(spa_mat)%in%fish$basin,colnames(spa_mat)%in%fish$basin]
+
+#checking again matrix structure: rownames and colnames order
+all.equal(rownames(spa_mat),colnames(spa_mat))#ok!
+
+#Are fish and spa_mat on the same order?
+table(rownames(spa_mat)==fish$basin)
+table(colnames(spa_mat)==fish$basin)
+
+#checking lower and upper triangles
+table(as.dist(spa_mat)==as.dist(t(spa_mat)) )#GREAT!
+
+#transforming in a distance object
+D_spat <- as.dist(spa_mat)
+
+rm(spa_mat)
+```
+
+
+\pagebreak
+
+## Checking the structure of **ALL Distance Matrices**
+
+Before modelling, it is important to check if **all distance matrices have the same data structure**. *Data structure* means that all distance matrices have identical row and colum names, and that rows and colums are exactly on the same order. This is important because as we advance in the modelling procedure, we must be sure that fish dissimilarity between Amazon1-Jari subdrainages, for instance, will be compared with habitat, current and past climate, and geographical distances for the same pair of subdrainages. Therefore, time has come to compare the structure of all dissimilarity matrices.
+
+```{r}
+#matrices:  D_CurrentLGM, D_energ, D_conec
+#           D_Habitat_size, D_Habitat_Div, D_Habitat_fragm, D_Habitat_harsh,
+#           D_Habitat_water, 
+#           D_Habitat_SampEff, D_Marine_Incurs,
+#           D_temp, D_water; and F_Bsor, F_Bsim, and F_Bsne, PBsne
+F_Bsor <- D_fish$beta.sor
+F_Bsim <- D_fish$beta.sim
+F_Bsne <- D_fish$beta.sne
+C_10mya <- D_pastConnect$C10mya
+C_23mya <- D_pastConnect$C23mya
+C_Pebas23mya <- D_pastConnect$Pebas23mya
+Fun_Bsor<-beta_funct$beta.sor#functional BDiv
+Fun_Bsim<-beta_funct$beta.sim
+Fun_Bsne<-beta_funct$beta.sne
+as.matrix(PBsimCasse)[1:20,1:20]
+
+
+# creating a function to compare dimensions, 
+# colnames, and rownames among pairs of dissimilarity matrices
+check_matrix_pair <- function(x,y){
+  # mats
+  x <- as.matrix(x)
+  y <- as.matrix(y)
+  
+  #matrix dimention
+  res <- all(c(all(dim(x) == dim(y))  ,
+  #matrix colnames
+  all(colnames(x) == colnames(y)) ,
+  #matrix rownames
+  all(rownames(x) == rownames(y)) ) )
+  return(res)
+}
+
+##########################
+### testing the function
+#1.different column order
+fake_mat <- matrix(NA,3,7,dimnames = list(1:3,1:7));fake_mat
+fake_mat2 <- fake_mat[,sample(ncol(fake_mat))];fake_mat2
+check_matrix_pair(fake_mat,fake_mat2)
+
+#2.identical matrices
+fake_mat <- matrix(NA,3,7,dimnames = list(1:3,1:7));fake_mat
+fake_mat2 <- fake_mat;fake_mat2
+check_matrix_pair(fake_mat,fake_mat2)
+
+#3.different row order
+fake_mat <- matrix(NA,3,7,dimnames = list(1:3,1:7));fake_mat
+fake_mat2 <- fake_mat[sample(nrow(fake_mat)),];fake_mat2
+check_matrix_pair(fake_mat,fake_mat2)
+
+#4.different matrix dimension
+fake_mat <- matrix(NA,3,7,dimnames = list(1:3,1:7));fake_mat
+fake_mat2 <- fake_mat[,1:5];fake_mat2
+check_matrix_pair(fake_mat,fake_mat2)
+
+#great, it works perfectly!
+rm(fake_mat2)
+##########################
+
+
+# Comparing the structure of all distance matrices
+# list of all distance matrices
+#matrices:  D_CurrentLGM, D_energ, D_conec
+#           D_Habitat_size, D_Habitat_Div, D_Habitat_fragm, D_Habitat_harsh,
+#           D_Habitat_water, 
+#           D_Habitat_SampEff, D_Marine_Incurs,
+#           D_temp, D_water; and F_Bsor, F_Bsim, and F_Bsne
+
+mats <- list(D_CurrentLGM = D_CurrentLGM , D_energ = D_energ , 
+             D_Habitat_size = D_Habitat_size ,
+             D_Habitat_Div = D_Habitat_Div , 
+             D_Habitat_harsh = D_Habitat_harsh,
+             D_Marine_Incurs = D_Marine_Incurs,
+             D_Habitat_fragm = D_Habitat_fragm, 
+             D_Habitat_water = D_Habitat_water , 
+             D_Habitat_SampEff = D_Habitat_SampEff , 
+             D_temp = D_temp, 
+             D_Habitat_position = D_Habitat_position,
+             D_water = D_water , F_Bsor = F_Bsor , 
+             F_Bsim = F_Bsim , F_Bsne = F_Bsne , 
+             PBsim = PBsim,PBsne = PBsne,
+             C_10mya = C_10mya , C_23mya = C_23mya , 
+             C_Pebas23mya = C_Pebas23mya ,  D_conec = D_conec, 
+             Fun_Bsor = Fun_Bsor , Fun_Bsim = Fun_Bsim , 
+             Fun_Bsne = Fun_Bsne ,
+             D_PCDp = D_PCDp ,
+             D_PCDp29k = D_PCDp29k, Dpw_mean = Dpw_mean,#Dpw_gen,
+             D_hydro = D_hydro, 
+             PBsimCasse = PBsimCasse,
+             fake_mat = fake_mat)
+
+#creating a matrix to receive results from all pairwise matrix combinations
+res <- matrix(NA,nrow = length(mats), ncol = length(mats),
+              dimnames = list(names(mats),
+                        names(mats)))
+#looping over all pairwise matrix combinations
+for(i in seq_along(mats)){
+  for(k in seq_along(mats)){
+    res[i,k] <- suppressWarnings(check_matrix_pair(mats[[i]],mats[[k]]))
+  }
+}
+
+#perfect! Only the fake matrix (fake_mat) has a different structure
+res
+image(res)
+
+
+rm(mats,res,fake_mat,i,k,F_Bsor,F_Bsim,F_Bsne,C_10mya,C_23mya,C_Pebas23mya)
+```
+
+***
+
+
+
+
+\pagebreak
+
+# Modelling fish beta diversity
+
+## Descriptive statistics
+
+```{r}
+##Table for Mapping
+med_simi<-function(x,nome="Bsim"){
+  x=as.matrix(x)
+  diag(x)<-NA
+  x<-rowMeans(x,na.rm = TRUE)
+  x<-data.frame(basin=names(x),x)
+  colnames(x)[2]<-nome
+  return(x)
+  }
+
+Median_simi<-function(x,nome="Bsim"){
+  x=as.matrix(x)
+  diag(x)<-NA
+  x<-apply(x,1,median,na.rm = TRUE)
+  x<-data.frame(basin=names(x),x)
+  colnames(x)[2]<-nome
+  return(x)
+  }
+
+
+one=med_simi(D_fish$beta.sim,nome="TaxoBsim")
+two=med_simi(PBsim,nome="PhyloBsim30k")
+three=med_simi(D_PCDp29k,nome="PCDp30k")
+four=med_simi(Fun_Bsim,nome="FunctBsim")
+five=med_simi(Dpw_mean,nome="Dpw_mean3k")
+one<-merge(one,two,by="basin")
+one<-merge(one,three,by="basin")
+one<-merge(one,four,by="basin")
+one<-merge(one,five,by="basin")
+rm(two, three, four,five)
+
+one$Median_TaxoBsim<-Median_simi(D_fish$beta.sim,nome="Median_TaxoBsim")$Median_TaxoBsim
+one$Median_PBsim<-Median_simi(PBsim,nome="Median_PBsim")$Median_PBsim
+
+#turnover vs nestedness comparison
+#Taxo
+summary(D_fish$beta.sim/D_fish$beta.sor)# mean=0.77, range=0.05-1.00
+sd(D_fish$beta.sim/D_fish$beta.sor)# sd= 0.18
+summary(D_fish$beta.sor)
+summary(D_fish$beta.sim)
+summary(D_fish$beta.sne)
+sd(D_fish$beta.sor)
+sd(D_fish$beta.sim)
+sd(D_fish$beta.sne)
+
+
+#Phylo
+summary(PBsim/(PBsim+PBsne))# mean=0.62, range=0.01-0.99
+sd(PBsim/(PBsim+PBsne))# sd= 0.24
+summary(PBsim+PBsne)
+summary(PBsim)
+summary(PBsne)
+sd(PBsim+PBsne)
+sd(PBsim)
+sd(PBsne)
+
+
+#Funct
+summary(beta_funct$beta.sim/beta_funct$beta.sor)# mean=0.31, range=0.00-1.00
+sd(beta_funct$beta.sim/beta_funct$beta.sor)# sd= 0.31
+summary(beta_funct$beta.sor)
+summary(beta_funct$beta.sim)
+summary(beta_funct$beta.sne)
+sd(beta_funct$beta.sor)
+sd(beta_funct$beta.sim)
+sd(beta_funct$beta.sne)
+
+
+#pairwise correlations
+#cor(one[,-1])
+cor.test(x = D_fish$beta.sim,y = PBsim)#taxo vs PhyloBsim30k
+
+cor.test(x = D_fish$beta.sim,y = Fun_Bsim)#taxo vs FuncBsim
+
+cor.test(x = PBsim,y = Fun_Bsim)#PhyloBsim30k vs FuncBsim
+
+cor.test(x = PBsim,y = Dpw_mean)#PhyloBsim30k vs Dpw (phylo ancient)
+
+cor.test(x = D_fish$beta.sim,y = Dpw_mean)#taxo vs Dpw (phylo ancient)
+
+cor.test(x = Fun_Bsim,y = Dpw_mean)#taxo vs Dpw (phylo ancient)
+
+
+
+#descriptive statistic
+summary(one)
+apply(one[,-1],2,sd)
+range((1-Fun_Bsim))
+
+
+sumario<-function(x){
+  list(Summary=summary(as.vector(x)),SD=sd(as.vector(x)))
+}
+
+
+#standardizing predictors
+D_energ_s<-Standard(D_energ) #current energy
+D_water_s<-Standard(D_water) #current water hypotheses
+D_temp_s<-Standard(D_temp) #current temperature: fast speciation hypotheses
+D_Habitat_size_s<-Standard(D_Habitat_size) #Habitat size (area + riverine density)
+D_Habitat_Div_s<-Standard(D_Habitat_Div) #Habitat Diversity (forest type + soil types)
+D_Habitat_harsh_s<-Standard(D_Habitat_harsh) #Habitat elevation gradient (elev mean, range, CSup15, Pro1000)
+D_Habitat_position_s<-Standard(D_Habitat_position) #Habitat position
+D_Habitat_fragm_s<-Standard(D_Habitat_fragm) #Habitat fragmentation
+D_Habitat_water_s<-Standard(D_Habitat_water) #Habitat water type
+D_Habitat_SampEff_s<-Standard(D_Habitat_SampEff) #Sampling effort
+D_Marine_Incurs_s<-Standard(D_Marine_Incurs) #Historical Marine Incursions
+D_CurrentLGM_s<-Standard(D_CurrentLGM) #past climate: past climate instability hypotheses
+D_Pebas23mya_s<-Standard(D_pastConnect$Pebas23mya) #Connected or not to Pebas Lake
+D_hydro_s<-Standard(D_hydro)
+D_spat_s<-Standard(D_spat)
+
+
+
+##VIF
+resu <- lm(as.vector(D_fish$beta.sim) ~ 
+              D_energ_s + D_water_s +#current energy/water hypotheses
+              D_temp_s + #current temperature: fast speciation hypotheses
+              D_Habitat_size_s + #Habitat size (area + riverine density)
+              D_Habitat_Div_s + #Habitat Diversity (forest type + soil types)
+              D_Habitat_harsh_s + #Habitat elevation gradient (elev mean, range, CSup15, Pro1000)
+              D_Habitat_position_s + #Habitat position
+              D_Habitat_fragm_s + #Habitat fragmentation
+              D_Habitat_water_s + #Habitat water type
+              D_Habitat_SampEff_s + #Sampling effort
+              D_Marine_Incurs_s + #Historical Marine Incursions
+              D_CurrentLGM_s + #past climate: past climate instability hypotheses
+              D_Pebas23mya_s + #Connected or not to Pebas Lake
+              D_hydro_s +
+              D_spat_s)
+car::vif(resu)
+rm(resu)
+
+
+```
+
+
+## The MRM model
+
+One way to model fish similarity^[We consider fish Similarity as 1-Dissimilarity. We consider fish similarity because it is an intuitive way to think on differences among species composition (i.e., two sub-drainages with *exactly* the same set of species would have similarity of 1, whereas two sub-drainages with *completely distinct* sets of fish species would have similarity of 0).] is to use **Multiple Regression on Distance Matrices**. This technique has been revised elsewhere and is a good way to explain variation in species composition based on a series of environmental (i.e., climate, habitat diversity, connectivity, etc) predictors `r citep( c("10.1007/s11258-006-9126-3", "10.1073/pnas.1507442112", "10.1111/ele.12319") )`. In this case, significance of variables is tested againt a null model based on the permutation of rows and columns on the response matrix [@Lichstein_2006; @Dias_2014].
+
+As *dissimilarity matrices of predictors* vary between *0* and $+\infty$ but have different mean and sd values, **coefficients** of the MRM models **absorve** such variation and therefore prevent comparing the effect size among predictors [@Gelman_2008]. In order to avoid such differences and to directly estimate coefficients reflecting the strength of the relationship, we rescaled all predictors so that they have **mean = 0** and **sd = 0.5** [@Gelman_2008]. This has been implemented by applying the `Standard`^[Defined as $Xs = (x - mean(x)) / (2*sd(x))$] function to each predictor directly on the MRM function.
+
+### Ordinary MRM (multiple regressions using Gaussian Distribution)
+
+```{r}
+#generic function for performing the same model over metrics
+
+modellingMRM_glm<-function(object,nameResponse,
+                           family){
+  require(ecodist)
+  response<-as.vector(object)
+  MRMformula<-formula(response ~
+              D_energ_s + D_water_s +#current energy/water hypotheses
+              D_temp_s + #current temperature: fast speciation hypotheses
+              D_Habitat_size_s + #Habitat size (area + riverine density)
+              D_Habitat_Div_s + #Habitat Diversity (forest type + soil types)
+              D_Habitat_harsh_s + #Habitat elevation gradient (elev mean, 
+                                      # range, CSup15, Pro1000)
+              D_Habitat_position_s + #Habitat position
+              D_Habitat_fragm_s + #Habitat fragmentation
+              D_Habitat_water_s + #Habitat water type
+              D_Habitat_SampEff_s + #Sampling effort
+              D_Marine_Incurs_s + #Historical Marine Incursions
+              D_CurrentLGM_s + #past climate: past climate instability hypotheses
+              D_Pebas23mya_s + #Connected or not to Pebas Lake
+              D_hydro_s +
+              D_spat_s)
+  
+  resu <- suppressWarnings(MRM(MRMformula,
+            nperm = 3999,mrank = F,method=family), classes = "warning")
+(resu<-suppressWarnings(do.call("rbind",resu), classes = "warning"))
+colnames(resu)<-c(nameResponse,paste0("pvalue_",nameResponse))
+round(resu,2)
+
+}
+
+
+
+library(ecodist)
+
+#TaxoBeta simpson = species turnover
+sumario(D_fish$beta.sim)
+resu<-modellingMRM_glm(object = D_fish$beta.sim,
+                 nameResponse = "TaxoBsim",
+                 family = "linear")
+
+
+
+#Filo Beta: 3000sp (Rabosky 2018, 2020)
+resuFilo3k<-modellingMRM_glm(object = PBsim,
+                 nameResponse = "PBsim3k",
+                 family = "linear")
+
+
+#Filo Beta: 600sp  (Rabosky 2018, 2020)
+resuFilo<-modellingMRM_glm(object = DsorPhylo$phylo.beta.sim,
+                 nameResponse = "PBsim_gen",
+                 family = "linear")
+
+
+#Filo Beta: 1111sp (Cassemiro et al 2023 PNAS)
+resuFiloCasse<-modellingMRM_glm(object = PBsimCasse,
+                 nameResponse = "PBsimCasse",
+                 family = "linear")
+
+
+
+
+
+
+#Funct Beta 3k species
+resuFunc<-modellingMRM_glm(object = Fun_Bsim,
+                 nameResponse = "Fun_Bsim",
+                 family = "linear")
+
+
+
+write.table(round(resu,2),file = "MRM_a_taxo.csv",sep=";")
+write.table(round(resuFilo3k,2),file = "MRM_b_filo3k.csv",sep=";") #Rabosky 2018, 2020
+write.table(round(resuFilo,2),file = "MRM_c_filo600sp.csv",sep=";") #Rabosky 2018, 2020
+write.table(round(resuFiloCasse,2),file = "MRM_b_filoCasse.csv",sep=";") #Cassemiro et al 2023PNAS
+write.table(round(resuFunc,2),file = "MRM_d_func.csv",sep=";")
+
+
+
+MRM_allMetrics<-(data.frame(round(resu,2),#taxo
+                      round(resuFilo3k,2),round(resuFilo,2),#PBsim
+                      round(resuFiloCasse,2), #PBsim Cassemiro et al 2023
+                      round(resuFunc,2)#Funct
+                      
+                      ))
+MRM_allMetrics<-data.frame(Variables=rownames(MRM_allMetrics),MRM_allMetrics)
+
+write.table(MRM_allMetrics,
+            file = paste0("MRM_allMetrics_",
+                          format(Sys.Date(), "%Y_%m"),
+                          ".csv"),
+            sep=";",row.names = FALSE)
+
+
+rm(resu,resuFilo3k,resuFilo,resuFiloCasse,resuFunc)
+
+
+```
+
+
+
+
+
+
+***
+Here are the variables used to compose each predictor:
+
+* Energie = AET (min, max, annual, cv) + PET (min, max, annual, cv) + NPP (mean, sd, cv)
+* Water availability = Precipitation (min, max, annual, cv) + Runoff (mean)
+* Temperature = Temperature (min, max, mean, cv) + Solar Radiation (mean, cv)
+* Habitat
+      + Habitat size = NetworkDensity + Area_log 
+      + Habitat diversity = ForestCover (%cover) + SoilCover
+      + Habitat harshness = Csup15 + ElevMean_log + ElevPropBasinAbove1000m 
+      + Habitat fragmentation = Chut_hydrofall_log
+      + Habitat WaterColor = WaterColor (categories black, clear, white; Same water type = 1, Distinct water type = 0)
+      + Habitat SamplingEffort = SamplingEffort
+* Diff_MarineInc = Marine Incursions, Proport Inf25m (log(x+1))
+* Diff_CurrentLGM = temp (min, max, mean) + precip (min, max, annual)
+* Pebas23mya = both connected -> 1, one conected or no connections to Pebas lake -> 0
+* Basin position  = DistanceEmbouchure + Codage
+* SpatialMat = WaterCourse distance among subdrainages
+
+***
+
+
+### MRM_glm (multiple regressions using Binomial Distribution)
+
+One problem with the previous model is that it is defined to deal with **linear** models (i.e., it is similar to using a simple linear model). However, dissimilarity matrices based on biological data are usually bounded between 0 (minimal similarity) and 1 (maximal similarity), and many observations may assume such extreme values. Linear models based on Gaussian error distribution (or models based on Pearson correlation) are not appropriate for such a kind of data because they are not theoretically bounded between 0-1 and as such they may produce unrealistic predicted values; this is specially true when a dissimilarity matrix have many observations of value 0 or 1 [@Dias_2014]. 
+
+In order to deal with theses problems and better set an appropriate model to deal with dissimilarities, we used Generalized Linear Models (**GLM**) with Binomial error distribution (and the *logit* link function). Binomial GLMs are appropriate to deal with bounded values (between 0 and 1) and can correctly estimate predicted values even under high frequency of *0s* and *1s* on the response variable. For further justification of such model, please check the procedure adopted by [@Dias_2014]. The GLM approach adopted here is equivalent to the MRM models fitted above, but has more advantages as those discussed above.
+As in the MRM, we calculated significance of predictors based on the simulation procedure described in [@Lichstein_2006; @Dias_2014].
+
+```{r}
+
+library(ecodist)
+
+#TaxoBeta simpson = species turnover
+resu<-modellingMRM_glm(object = D_fish$beta.sim,
+                 nameResponse = "TaxoBsim",
+                 family = "logistic")
+
+# TaxoBeta nestedness
+sumario(D_fish$beta.sne)
+resuTaxoBsne<-modellingMRM_glm(object = D_fish$beta.sne,
+                 nameResponse = "TaxoBsne",
+                 family = "logistic")
+
+
+#Filo Beta: 3000sp   (Rabosky 2018, 2020)
+resuFilo3k <- modellingMRM_glm(object = PBsim,
+                 nameResponse = "PBsim3k",
+                 family = "logistic")
+
+# Filo Beta nestedness
+resuFilo3kBsne <- modellingMRM_glm(object = PBsne,
+                 nameResponse = "PBsne3k",
+                 family = "logistic")
+
+
+#Filo Beta: 600sp   (Rabosky 2018, 2020)
+resuFilo <- modellingMRM_glm(object = DsorPhylo$phylo.beta.sim,
+                 nameResponse = "PBsim_gen",
+                 family = "logistic")
+
+resuFiloBsne <- modellingMRM_glm(object = DsorPhylo$phylo.beta.sne,
+                 nameResponse = "PBsim_gen",
+                 family = "logistic")
+
+
+
+#Filo Beta: 1111sp   (Cassemiro et al 2023PNAS)
+resuFiloCasse <- modellingMRM_glm(object = PBsimCasse,
+                 nameResponse = "PBsimCasse",
+                 family = "logistic")
+# resuFiloCasseBsne <- modellingMRM_glm(object = PBsneCasse,
+#                  nameResponse = "PBsimCasse",
+#                  family = "logistic")
+
+
+
+
+#Funct Beta 3k species
+#rounding extremely low negative values (-1.1e-15) to 0
+min(Fun_Bsim)
+Fun_Bsim<-as.matrix(Fun_Bsim)
+table(Fun_Bsim[Fun_Bsim<0])
+Fun_Bsim[Fun_Bsim<0]<-0
+Fun_Bsim<-as.dist(Fun_Bsim)
+
+resuFunc <- modellingMRM_glm(object = Fun_Bsim,
+                 nameResponse = "Fun_Bsim",
+                 family = "logistic")
+
+#Funct Beta nestedness
+resuFuncBsne <- modellingMRM_glm(object = Fun_Bsne,
+                 nameResponse = "Fun_Bsne",
+                 family = "logistic")
+
+  
+write.table(round(resu,2),file = "MRM_a_taxoBsim_glm.csv",sep=";")
+write.table(round(resuTaxoBsne,2),file = "MRM_a2_taxoBsne_glm.csv",sep=";")
+write.table(round(resuFilo3k,2),file = "MRM_b_filo3k_glm.csv",sep=";") #Rabosky 2018, 2020
+write.table(round(resuFilo3kBsne,2),file = "MRM_b2_filo3kBsne_glm.csv",sep=";") #Rabosky 2018, 2020
+write.table(round(resuFilo,2),file = "MRM_c_filo600sp_glm.csv",sep=";") #Rabosky 2018, 2020
+write.table(round(resuFiloCasse,2),file = "MRM_b_filoCasse_glm.csv",sep=";") #Cassemiro et al 2023PNAS
+write.table(round(resuFunc,2),file = "MRM_d_funcBsim_glm.csv",sep=";")
+write.table(round(resuFuncBsne,2),file = "MRM_d2_funcBsne_glm.csv",sep=";")
+
+
+
+
+
+MRM_allMetrics<-data.frame(rownames(resu),
+                           round(resu,2),
+                           round(resuTaxoBsne,2),#TaxoBsne
+                           round(resuFilo3k,2), #Rabosky 2018,2020
+                           round(resuFilo3kBsne,2),#PBsne
+                           round(resuFilo,2), #Rabosky 2018,2020
+                           round(resuFiloCasse,2), #Cassemiro et al 2023PNAS
+                           round(resuFunc,2),
+                           round(resuFuncBsne,2))#Fun_Bsne
+
+write.table(MRM_allMetrics,
+            file = paste0("MRM_allMetrics_glm_",
+                          format(Sys.time(), "%Y_%m"),
+                          ".csv"),
+            sep=";",row.names = FALSE)
+
+
+rm(resu,resuFilo3k,resuFilo,resuFiloCasse,resuFunc)
+
+
+```
+
+
+
+\pagebreak
+
+
+### Testing excluding undersampled basins
+
+First, I identify the basins undersampled according to `r citep( c("10.1111/cobi.13466") )`.
+```{r}
+#following Jézéquel et al. 2020Conservation biology, Figure 1a
+undersample_basins<-c("Demini","Paru_Este","Jari","Jamanxim","Grande","Tapaua",
+                      "Apurimac1","Ucayali2","Curaray")
+amazon$UnderSampled<-0
+amazon$UnderSampled[amazon$BvNiv2 %in% undersample_basins]<-1
+
+plot(amazon["UnderSampled"])
+
+
+```
+
+Then, I constructed a function to remove those pairwise values from distance matrices
+
+```{r}
+# x<-D_fish$beta.sim
+# N<-undersample_basins
+
+Exclude_Undersampled<-function(DistanceMatrix=x,NamesToExclude=N){
+  M<-as.matrix(DistanceMatrix)
+  # dim(M)
+  N<-NamesToExclude
+  M<-as.dist(M[!rownames(M)%in%N,!colnames(M)%in%N])
+  return(M)
+}
+
+test<-Exclude_Undersampled(DistanceMatrix = D_fish$beta.sim,
+                     NamesToExclude = undersample_basins)
+
+names(test)
+table(names(test)%in%undersample_basins)#corrected excluded
+
+rm(test)
+```
+
+
+Now I refit the same models without those problematic basins
+
+```{r}
+library(ecodist)
+
+#biological data
+TaxoBsim_US<-Exclude_Undersampled(DistanceMatrix = D_fish$beta.sim,
+                     NamesToExclude = undersample_basins)
+
+PBsim_US<-Exclude_Undersampled(DistanceMatrix = PBsim,
+                     NamesToExclude = undersample_basins)
+
+PBsim600_US<-Exclude_Undersampled(DistanceMatrix = DsorPhylo$phylo.beta.sim,
+                     NamesToExclude = undersample_basins)
+
+PBsimCasse_US<-Exclude_Undersampled(DistanceMatrix = PBsimCasse,
+                     NamesToExclude = undersample_basins)
+
+Dpw_mean_US<-Exclude_Undersampled(DistanceMatrix = Dpw_mean,
+                     NamesToExclude = undersample_basins)
+
+Fun_Bsim_US<-Exclude_Undersampled(DistanceMatrix = Fun_Bsim,
+                     NamesToExclude = undersample_basins)
+
+
+#predictors
+#removing & standardizing predictors
+energ_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_energ,
+                     NamesToExclude = undersample_basins)) 
+
+water_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_water,
+                     NamesToExclude = undersample_basins)) 
+
+temp_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_temp,
+                     NamesToExclude = undersample_basins))
+
+size_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Habitat_size,
+                     NamesToExclude = undersample_basins)) 
+
+Div_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Habitat_Div,
+                     NamesToExclude = undersample_basins)) 
+
+harsh_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Habitat_harsh,
+                     NamesToExclude = undersample_basins)) 
+
+position_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Habitat_position,
+                     NamesToExclude = undersample_basins))
+
+fragm_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Habitat_fragm,
+                     NamesToExclude = undersample_basins)) 
+
+water_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Habitat_water,
+                     NamesToExclude = undersample_basins)) 
+
+SampEff_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Habitat_SampEff,
+                     NamesToExclude = undersample_basins))
+
+Marine_Incurs_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_Marine_Incurs,
+                     NamesToExclude = undersample_basins)) 
+
+CurrentLGM_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_CurrentLGM,
+                     NamesToExclude = undersample_basins)) 
+
+Pebas23mya_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_pastConnect$Pebas23mya,
+                     NamesToExclude = undersample_basins))
+
+hydro_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_hydro,
+                     NamesToExclude = undersample_basins))
+
+spat_US<-Standard(Exclude_Undersampled(DistanceMatrix = D_spat,
+                     NamesToExclude = undersample_basins))
+
+
+
+
+modelTaxoBsim<-formula("as.vector(TaxoBsim_US) ~ 
+              energ_US + water_US +
+              temp_US +
+              size_US + 
+              Div_US + 
+              harsh_US + 
+              position_US +
+              fragm_US +
+              water_US +
+              SampEff_US +
+              Marine_Incurs_US +
+              CurrentLGM_US +
+              Pebas23mya_US +
+              hydro_US +
+              spat_US")
+
+#TaxoBeta simpson = species turnover
+
+resu <- suppressWarnings(MRM(modelTaxoBsim,
+            nperm = 3999,mrank = F,method = "logistic"), classes = "warning")
+
+(resu<-do.call("rbind",resu))
+colnames(resu)<-c("TaxoBsim","pvalue_TaxoBsim")
+round(resu,2)
+
+
+#Filo Beta: 3000sp (Rabosky 2018, 2020)
+modelPBsim<-formula("as.vector(PBsim_US) ~ 
+              energ_US + water_US +
+              temp_US +
+              size_US + 
+              Div_US + 
+              harsh_US + 
+              position_US +
+              fragm_US +
+              water_US +
+              SampEff_US +
+              Marine_Incurs_US +
+              CurrentLGM_US +
+              Pebas23mya_US +
+              hydro_US +
+              spat_US")
+
+
+resuFilo3k <- suppressWarnings(MRM(modelPBsim,
+            nperm = 3999,mrank = F,method = "logistic"), classes = "warning")
+
+(resuFilo3k<-do.call("rbind",resuFilo3k))
+colnames(resuFilo3k)<-c("PBsim3k","pvalue_PBsim3k")
+round(resuFilo3k,2)
+
+#Filo Beta: 600sp  (Rabosky 2018, 2020)
+modelPBsim600<-formula("as.vector(PBsim600_US) ~ 
+              energ_US + water_US +
+              temp_US +
+              size_US + 
+              Div_US + 
+              harsh_US + 
+              position_US +
+              fragm_US +
+              water_US +
+              SampEff_US +
+              Marine_Incurs_US +
+              CurrentLGM_US +
+              Pebas23mya_US +
+              hydro_US +
+              spat_US")
+
+
+resuFilo <- suppressWarnings(MRM(modelPBsim600,
+            nperm = 3999,mrank = F,method = "logistic"), classes = "warning")
+
+(resuFilo<-do.call("rbind",resuFilo))
+colnames(resuFilo)<-c("PBsim_gen","pvalue_PBsim_gen")
+round(resuFilo,2)
+
+
+#Filo Beta: 1111sp (Cassemiro et al 2023 PNAS)
+modelPBsimCasse<-formula("as.vector(PBsimCasse_US) ~ 
+              energ_US + water_US +
+              temp_US +
+              size_US + 
+              Div_US + 
+              harsh_US + 
+              position_US +
+              fragm_US +
+              water_US +
+              SampEff_US +
+              Marine_Incurs_US +
+              CurrentLGM_US +
+              Pebas23mya_US +
+              hydro_US +
+              spat_US")
+
+
+resuFiloCasse <- suppressWarnings(MRM(modelPBsimCasse,
+            nperm = 3999,mrank = F,method = "logistic"), classes = "warning")
+
+(resuFiloCasse<-do.call("rbind",resuFiloCasse))
+colnames(resuFiloCasse)<-c("PBsimCasse","pvalue_PBsimCasse")
+round(resuFiloCasse,2)
+
+
+
+
+
+
+
+#Funct Beta 3k species
+# Fun_Bsim_US
+summary(Fun_Bsim_US)
+
+modelFunBsimUS<-formula("as.vector(Fun_Bsim_US) ~ 
+              energ_US + water_US +
+              temp_US +
+              size_US + 
+              Div_US + 
+              harsh_US + 
+              position_US +
+              fragm_US +
+              water_US +
+              SampEff_US +
+              Marine_Incurs_US +
+              CurrentLGM_US +
+              Pebas23mya_US +
+              hydro_US +
+              spat_US")
+
+
+resuFunc <- suppressWarnings(MRM(modelFunBsimUS,
+            nperm = 3999,mrank = F,method = "logistic"), classes = "warning")
+
+(resuFunc<-do.call("rbind",resuFunc))
+colnames(resuFunc)<-c("Fun_Bsim","pvalue_Fun_Bsim")
+round(resuFunc,2)
+
+
+
+write.table(round(resu,2),
+            file = "UnderSampled_MRM_glm_a_taxo.csv",sep=";")
+
+write.table(round(resuFilo3k,2),
+            file = "UnderSampled_MRM_glm_b_filo3k.csv",sep=";") #Rabosky 2018, 2020
+
+write.table(round(resuFilo,2),
+            file = "UnderSampled_MRM_glm_c_filo600sp.csv",sep=";") #Rabosky 2018, 2020
+
+write.table(round(resuFiloCasse,2),
+            file = "UnderSampled_MRM_glm_b_filoCasse.csv",sep=";") #Cassemiro et al 2023PNAS
+
+write.table(round(resuFunc,2),
+            file = "UnderSampled_MRM_glm_d_func.csv",sep=";")
+
+
+
+MRM_allMetrics<-(data.frame(round(resu,2),#taxo
+                      round(resuFilo3k,2),round(resuFilo,2),#PBsim
+                      round(resuFiloCasse,2), #PBsim Cassemiro et al 2023
+                      round(resuFunc,2)#Funct
+                      #,round(resuFilo_ancient_genetic,2)
+                      ))
+MRM_allMetrics<-data.frame(Variables=rownames(MRM_allMetrics),MRM_allMetrics)
+
+write.table(MRM_allMetrics,
+            file = paste0("UnderSampled_MRM_glm_allMetrics_",
+                          format(Sys.time(), "%Y_%m"),
+                          ".csv"),
+            sep=";",row.names = FALSE)
+
+
+rm(resu,resuFilo3k,resuFilo,resuFiloCasse,resuFunc)
+
+```
+
+
+
+***
+Here are the variables used to compose each predictor:
+
+* Energie = AET (min, max, annual, cv) + PET (min, max, annual, cv) + NPP (mean, sd, cv)
+* Water availability = Precipitation (min, max, annual, cv) + Runoff (mean)
+* Temperature = Temperature (min, max, mean, cv) + Solar Radiation (mean, cv)
+* Habitat
+      + Habitat size = NetworkDensity + Area_log 
+      + Habitat diversity = ForestCover (%cover) + SoilCover
+      + Habitat harshness = Csup15 + ElevMean_log + ElevPropBasinAbove1000m 
+      + Habitat fragmentation = Chut_hydrofall_log
+      + Habitat WaterColor = WaterColor (categories black, clear, white; Same water type = 1, Distinct water type = 0)
+      + Habitat SamplingEffort = SamplingEffort
+* Diff_MarineInc = Marine Incursions, Proport Inf25m (log(x+1))
+* Diff_CurrentLGM = temp (min, max, mean) + precip (min, max, annual)
+* Pebas23mya = both connected -> 1, one conected or no connections to Pebas lake -> 0
+* Basin position  = DistanceEmbouchure + Codage
+* SpatialMat = WaterCourse distance among subdrainages
+***
+
+
+\pagebreak
+
+### Simple plots
+
+Let's see some plots among fish similarity and the predictors used in the modelling procedure.
+
+#### Taxonomic beta diversity
+
+
+```{r}
+par(mfrow=c(1,1),cex.lab=1.5)
+#jpeg("CompositionBsim_WaterCourseDistance.jpeg",width = 8000,height = 2000,res = 400)
+plot(D_fish$beta.sim ~ Standard(D_spat), ylab="Fish dissimilarity",
+     xlab="Spatial distance (watercourse)",
+     las=1, cex = 1, col="gray",ylim=c(0,1))
+#curve(plogis(-0.19-0.68*x),add=T)
+# dev.off()
+```
+
+
+```{r}
+# jpeg("CompositionBsim_Fragmentation.jpeg",width = 8000,height = 2000,res = 400)
+plot(D_fish$beta.sim ~ Standard(D_Habitat_fragm), ylab="Fish dissimilarity",
+     xlab="Habitat Fragmentation (dissimilarity)",
+     las=1, cex = 1, col="gray",ylim=c(0,1))
+#curve(plogis(-0.19-0.41*x),add=T)
+# dev.off()
+```
+
+
+```{r}
+# jpeg(".jpeg",width = 2000,height = 2000,res = 400)
+plot(Dpw_mean ~ as.vector(D_pastConnect$Pebas23mya), ylab="Basal fish dissimilarity (gen+poly)",
+     xlab="Pebas connectivity",
+     las=1, cex = 1, col="gray")
+
+# plot(Dpw_gen ~ as.factor(D_pastConnect$Pebas23mya), ylab="Basal fish dissimilarity (gen+poly)",
+#      xlab="Pebas connectivity",
+#      las=1, cex = 1, col="gray")
+# dev.off()
+```
+
+
+```{r}
+
+plot(D_fish$beta.sim  ~ D_spat, ylab="Tip fish dissimilarity",
+     xlab="Spatial distance",
+     las=1, cex = 1, col="gray")
+
+plot(PBsim  ~ D_spat, ylab="Tip fish dissimilarity",
+     xlab="Spatial distance",
+     las=1, cex = 1, col="gray")
+
+```
+
+```{r}
+# jpeg("CompositionBsim_PebasConnect.jpeg",width = 2000,height = 2000,res = 400)
+  plot(D_fish$beta.sim ~ (as.vector(D_pastConnect$Pebas23mya)), 
+           ylab="Fish dissimilarity (Bsim)",
+           xlab="PEBAS connectivity (23mya)",#vertical=T,method="jitter",
+           las=1, cex = 1, col="gray",ylim=c(0,1))
+# dev.off()
+
+
+plot(D_fish$beta.sim ~ D_Marine_Incurs, 
+           ylab="Fish dissimilarity (Bsim)",
+           xlab="Marine Incursions",#vertical=T,m   ethod="jitter",
+           las=1, cex = 1, col="gray",ylim=c(0,1))
+
+```
+
+
+\pagebreak
+
+
+#### Phylogenetic beta diversity (Rabosky genetic + polytomies, Phylo 29k species)
+
+```{r}
+par(mfrow=c(1,1),cex.lab=2)
+plot(PBsim ~ D_Habitat_SampEff, ylab="PhyloBsim 29k",
+     xlab="Sampling Effort (dissimilarity)",
+     las=1, cex = 1, col="gray")
+
+# jpeg("CompositionBsim_WaterType.jpeg",width = 2000,height = 2000,res = 400)
+plot(as.vector(PBsim) ~ as.factor(as.vector(D_Habitat_water)), 
+           ylab="PhyloBsim 29k",
+           xlab="Water type (same = 0, distinct = 1)",
+           #vertical=T,method="jitter",
+     las=1, cex = 1, col="gray",ylim=c(0,1))
+# dev.off()
+plot(PBsim ~ D_pastConnect$Pebas23mya, ylab="PhyloBsim 29k",
+     xlab="Connected or not to Pebas",
+     las=1, cex = 1, col="gray")
+
+plot(PBsim ~ D_Habitat_fragm, ylab="PhyloBsim 29k",
+     xlab="Fragmentation dissimilarity",
+     las=1, cex = 1, col="gray")
+
+```
+
+
+
+\pagebreak
+
+#### Functional Beta Sim 3D na Filled (WITH and WITHOUT OUTLIER)
+
+```{r}
+par(mfrow=c(1,1),cex.lab=2)
+plot(Fun_Bsim ~ D_Habitat_SampEff, ylab="Functional Beta sim 3D na filled",
+     xlab="Sampling effort Dissimilarity",
+     las=1, cex = 1, col="gray")
+
+
+# plot(Fun_Bsim_withoutOutlier ~ D_Habitat_SampEff, 
+#      ylab="Functional Beta sim 3D na filled without OUTLIER",
+#      xlab="Sampling effort Dissimilarity",
+#      las=1, cex = 1, col="gray")
+
+```
+
+
+\pagebreak
+
+
+
+```{r,eval=FALSE,include=FALSE}
+par(mfrow=c(1,1),cex.lab=2)
+```
+
+
+
+
+\pagebreak
+
+## Spatial autocorrelation
+
+We are not following `r citep( c("10.1007/s11258-006-9126-3", "10.1073/pnas.1507442112") )` on their strategy for teasing appart the spatial structure from MRM models. Rather, we compute correlograms (note both are on the same y scale) based on the raw fish distance matrix and than on the residuals of our modelling procedure (MRMglm). 
+
+```{r,collapse=T}
+#Spatial struture in raw fish dissimilarity
+library(ecodist)
+correlog <- mgram(species.d = D_fish$beta.sim, space.d = D_spat,
+                  nperm = 1000);#correlog
+#par(mfrow=c(1,2))
+plot(correlog,ylim=c(-0.2,0.3),
+     main='Correlogram raw distance matrix')
+
+#spatial structure on MRMglm model residuals
+resu <- glm(as.vector((D_fish$beta.sim)) ~ 
+                Standard(D_energ) + Standard(D_water) +#current energy/water hypotheses
+              Standard(D_temp) + #current temperature: fast speciation hypotheses
+              Standard(D_Habitat_size) + #Habitat size (area + riverine density)
+              Standard(D_Habitat_Div) + #Habitat Diversity (forest type + soil types)
+              Standard(D_Habitat_harsh) + #Habitat elevation gradient (elev mean, range, CSup15, Pro1000)
+              Standard(D_Habitat_position) + #Habitat position
+              Standard(D_Habitat_fragm) + #Habitat fragmentation
+              Standard(D_Habitat_water) + #Habitat water type
+              Standard(D_Habitat_SampEff) + #Sampling effort
+              Standard(D_Marine_Incurs) + #Historical Marine Incursions
+              Standard(D_CurrentLGM) + #past climate: past climate instability hypotheses
+              Standard(D_pastConnect$Pebas23mya) + #Connected or not to Pebas Lake
+              Standard(D_spat),
+            family=binomial(link='logit'))
+
+correlog_resid <- mgram(species.d = resid(resu,type = 'pearson'), space.d = D_spat,
+                  nperm = 1000);#correlog_resid
+plot(correlog_resid,ylim=c(-0.2,0.3),
+     main='Correlogram on MRMglm residuals (on the response scale)')
+
+
+rm(resu,correlog, correlog_resid)
+```
+
+
+***
+
+\pagebreak
+
+
+# Plotting maps of biological data
+
+```{r,include=FALSE}
+#library(GISTools)
+library(RColorBrewer)
+```
+
+```{r,fig.align='center'}
+
+fish<-merge(fish,one,by="basin")
+
+
+#merging fish data base
+head(fish)
+rownames(fish)<-fish$basin
+fish<-fish[amazon$BvNiv2,]
+fish$BvNiv2<-fish$basin
+names(fish)
+names(amazon)
+
+
+library(dplyr)
+amazon = left_join(amazon,fish,by="BvNiv2")
+is(amazon)
+plot(amazon["TaxoBsim"])
+plot(amazon["PhyloBsim30k"])
+plot(amazon["FunctBsim"])
+plot(amazon["Inf25m_log"],main="marine incursion")
+plot(amazon["PebasLake"])
+
+
+
+#Fig1 with ggplot
+library(ggplot2)
+library(dplyr)
+library(viridis)
+library(gridExtra)
+library(maps)
+# library(raster)
+# library(RStoolbox)
+
+WorldData <- map_data('world')
+#WorldData<-fortify(WorldData)
+wld<-ggplot()+ theme_bw()
+wld<-wld+geom_map(data=WorldData,map=WorldData,
+                    aes(x=long, y=lat, map_id=region),
+                    color="white", fill="gray50", linewidth=0.2)+#fill="gray92", size=0.05, alpha=1/4
+  xlim(-81,-50)+ylim(-21,6)
+# wld+geom_point(data=pts,aes(x=CoordX,y=CoordY),size=0.7,alpha=0.5)
+# wld+geom_point(data=gridA,aes(x=long,y=lat,group=group),size=0.7,alpha=0.5)
+
+# head(amazon)
+# dim((amazon))
+amazon_d<-amazon
+# # head(amazon_d)
+# # head(fish)
+# amazon_d<-merge(x=amazon_d,y=fish,by.x="BvNiv2",by.y="BvNiv2",all.x=T)
+# # head(amazon_d)
+
+
+ditch_the_axes <- theme(
+  axis.text = element_blank(),
+  #axis.line = element_blank(),
+  axis.ticks = element_blank(),
+  panel.border = element_rect(fill = FALSE),
+  #panel.grid = element_blank(),
+  axis.title = element_blank()
+)
+
+
+
+
+fig1a<-wld+  
+  geom_sf(data=amazon_d,aes(fill=TaxoBsim),#catego_cores(TaxoBsim)
+               color="white",size=0.2)+
+  scale_fill_viridis(name = "",begin = 0, end = 1,
+                     guide = guide_colorbar(barwidth = 14, barheight = 2))+
+  #scale_fill_gradient(na.value = "white",low="blue",high="red")+
+  ditch_the_axes+
+  theme(legend.position.inside = c(0.23, 0.09),legend.direction = "horizontal",legend.text=element_text(size=11))+
+  annotate("text", x=-70, y=5, label= "a) TaxoBsim     ",size=15)
+fig1a
+
+
+fig1b<-wld+  
+  geom_sf(data=amazon_d,aes(fill=PhyloBsim30k),#catego_cores(PhyloBsim30k)
+               color="white",size=0.2)+
+  scale_fill_viridis(name = "",begin = 0, end = 1,guide = guide_colorbar(barwidth = 14, barheight = 2))+
+  #scale_fill_gradient(na.value = "white",low="blue",high="red")+
+  ditch_the_axes+
+    theme(legend.position.inside = c(0.23, 0.09),legend.direction = "horizontal",legend.text=element_text(size=11))+
+  annotate("text", x=-71, y=5, label= "b) PhyloBsim",size=15)
+fig1b
+
+# fig1c<-wld+  
+#   geom_polygon(data=amazon_d,aes(long,lat,group=group,fill=PCDp30k),color="white",size=0.2)+
+#   scale_fill_viridis(name = "",begin = 0.1, end = 1,guide = guide_colorbar(barwidth = 14, barheight = 2))+
+#   #scale_fill_gradient(na.value = "white",low="blue",high="red")+
+#   ditch_the_axes+
+#     theme(legend.position = c(0.22, 0.09),legend.direction = "horizontal",legend.text=element_text(size=15))+
+#   annotate("text", x=-75, y=5, label= "C) PCDp     ",size=15)
+# fig1c
+
+fig1d<-wld+  
+  geom_sf(data=amazon_d,aes(fill=FunctBsim),#catego_cores(FunctBsim))
+               color="white",size=0.2)+
+  scale_fill_viridis(name = "",begin = 0, end = 1,guide = guide_colorbar(barwidth = 14, barheight = 2))+
+  #scale_fill_gradient(na.value = "white",low="blue",high="red")+
+  ditch_the_axes+
+    theme(legend.position.inside = c(0.23, 0.09),legend.direction = "horizontal",legend.text=element_text(size=11))+
+  annotate("text", x=-73, y=5, label= "c) TraitBsim",size=15)
+fig1d
+
+
+
+#save
+ g <- arrangeGrob(fig1a,fig1b, fig1d, nrow=1) #generates g
+ #g
+ ggsave(file="Fig1.jpeg", g,units = "cm",width = 55,height = 15,dpi = 300)
+
+#
+ 
+
+ 
+ 
+
+```
+
+
+
+***
+
+\pagebreak
+
+# R + knitr Section Informations
+```{r,echo=F}
+sessionInfo()
+```
+
+\pagebreak
+
+# Bibliography
+
+```{r, echo=FALSE, message=FALSE}
+write.bibtex(file="biblio_style/references.bib")
+```
+
